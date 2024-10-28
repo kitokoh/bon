@@ -4,7 +4,7 @@ from check_license import is_license_valid
 
 def force_utf8_encoding(filepath):
     """
-    Force l'encodage UTF-8 du fichier donné si ce n'est pas déjà le cas.
+    Force l'encodage UTF-8 du fichier donné si ce n'est pas déjà le caas.
     """
     try:
         # Tentative de lire le fichier en UTF-8

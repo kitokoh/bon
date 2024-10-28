@@ -1,10 +1,10 @@
-pyarmor gen -i .\libs\  --output=../dist
-pyarmor gen -i check_license.py --output=../dist
-pyarmor gen -i __post_in_groups__.py  --output=../dist
-pyarmor gen -i __post_in_groupsx__.py  --output=../dist
-pyarmor gen -i __save_groups__.py  --output=../dist
+pyarmor gen -i .\libs\  --output=../bonDist
+pyarmor gen -i check_license.py --output=../bonDist
+pyarmor gen -i __post_in_groups__.py  --output=../bonDist
+pyarmor gen -i __post_in_groupsx__.py  --output=../bonDist
+pyarmor gen -i __save_groups__.py  --output=../bonDist
 
-
+git branch --set-upstream-to=origin/main new_branch
 
 
 
