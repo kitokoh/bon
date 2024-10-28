@@ -1,3 +1,15 @@
+pyarmor gen -i .\libs\  --output=../dist
+pyarmor gen -i check_license.py --output=../dist
+pyarmor gen -i __post_in_groups__.py  --output=../dist
+pyarmor gen -i __post_in_groupsx__.py  --output=../dist
+pyarmor gen -i __save_groups__.py  --output=../dist
+
+
+
+
+
+
+
 <div><a href='https://github.com/darideveloper/facebook-groups-post-bot/blob/master/LICENSE' target='_blank'>
                 <img src='https://img.shields.io/github/license/darideveloper/facebook-groups-post-bot.svg?style=for-the-badge' alt='MIT License' height='30px'/>
             </a><a href='https://www.linkedin.com/in/francisco-dari-hernandez-6456b6181/' target='_blank'>
