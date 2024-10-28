@@ -6,12 +6,18 @@ from libs.logs import logger
 from time import sleep
 from libs.automate import WebScraping
 
-# Read env vars
-load_dotenv()
+# # Read env vars
+# load_dotenv()
+# CHROME_FOLDER = os.getenv("CHROME_FOLDER")
+# WAIT_MIN = int(os.getenv("WAIT_MIN"))
+
+# Read env vars 
+load_dotenv ()
 CHROME_FOLDER = os.getenv("CHROME_FOLDER")
 WAIT_MIN = int(os.getenv("WAIT_MIN"))
-
-
+PROFILE = os.getenv("PROFILE")
+PUBLISH_LABEL = os.getenv("PUBLISH_LABEL")
+VISIT_LABEL = os.getenv("VISIT_LABEL")
 class Scraper(WebScraping):
 
     def __init__(self):
@@ -22,6 +28,7 @@ class Scraper(WebScraping):
         self.data_pathx = os.path.join(parent_folder, "data1.json")
 
         self.selectors_path = os.path.join(parent_folder, "config", "selectors.json")
+        self.PROFILE = os.getenv("PROFILE")
 
         # Read JSON data
         with open(self.data_path, encoding="UTF-8") as file:
@@ -33,9 +40,11 @@ class Scraper(WebScraping):
         with open(self.selectors_path, encoding="UTF-8") as file:
             self.selectors = json.load(file)
 
+        # # Start scraper
+        super().__init__(chrome_folder=CHROME_FOLDER, start_killing=True, user_agent=True)
         # Start scraper
-        super().__init__(chrome_folder=CHROME_FOLDER, start_killing=True)
-
+        #super().__init__(chrome_folder=CHROME_FOLDER, start_killing=True, user_agent=True, profile = PROFILE)
+        
 
     def post_in_groupsx(self):
         """Publish each post in each group from data file."""
