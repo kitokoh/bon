@@ -88,7 +88,7 @@ def is_license_valid():
 
     try:
         with open(license_file, 'r') as f:
-            license_content = f.read().strip()
+            license_content = f.readline().strip()
     except IOError as e:
         print(f"Erreur : Impossible de lire le fichier de licence. Détails : {e}")
         return False
