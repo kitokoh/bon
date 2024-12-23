@@ -151,7 +151,7 @@ class Scraper(WebScraping):
             except Exception:
                 logger.error(f'Error submitting post: "{post_text}" ({group})')
                 continue
-            sleep(WAIT_MIN * 60)
+            sleep(WAIT_MIN * 11)
 
             # Save register of post
             posts_done.append([group, post])
