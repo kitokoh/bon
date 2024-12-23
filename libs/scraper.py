@@ -98,7 +98,7 @@ class Scraper(WebScraping):
         posts_done.append([group, post_text])
 
         # Attends avant de poster dans un autre groupe
-        sleep(WAIT_MIN * 60)
+        sleep(WAIT_MIN * 11)
         
 
 
