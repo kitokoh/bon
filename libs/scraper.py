@@ -1,3 +1,5 @@
+
+
 import os
 import json
 import random
@@ -126,195 +128,79 @@ class Scraper(WebScraping):
             for future in futures:
                 future.result()  # Attendre que chaque tâche soit terminée
 
-    def post_comment(self, post_url, comment_text):
-        """Poste un commentaire sur un post spécifique."""
-        try:
-            # Naviguer vers l'URL du post
-            self.set_page(post_url)
-            self.random_sleep(3, 5)
-
-            # Attendre que la zone de commentaire soit chargée et cliquable
-            WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, self.selectors["comment_input"]))
-            )
-
-            # Remplir le champ de commentaire
-            comment_input = self.driver.find_element(By.CSS_SELECTOR, self.selectors["comment_input"])
-            comment_input.send_keys(comment_text)
-            self.random_sleep(1, 2)
-
-            # Attendre que le bouton de soumission soit cliquable
-            WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, self.selectors["submit_comment"]))
-            )
-
-            # Soumettre le commentaire
-            submit_button = self.driver.find_element(By.CSS_SELECTOR, self.selectors["submit_comment"])
-            submit_button.click()
-            self.random_sleep(1, 2)
-
-            logger.info(f'Commentaire posté avec succès : "{comment_text}" sur {post_url}')
-            print(f'Commentaire posté avec succès : "{comment_text}" sur {post_url}')
-            return True
-
-        except Exception as e:
-            logger.error(f'Erreur lors du post du commentaire : {e}')
-        return False
     def post_in_groupsx(self):
-        """Publie un post aléatoire dans chaque groupe avec plusieurs images."""
+        """Publie un post aléatoire dans un groupe aléatoire avec plusieurs images."""
         posts_done = []
 
-        # Parcourir tous les groupes
-        for group in self.json_datax["groups"]:
-            logger.info(f"Navigating to group: {group}")
-            print(f"Navigation vers le groupe : {group}")
-            self.set_page(group)
-            self.random_sleep(3, 5)
+        # Choisir un groupe aléatoire
+        group = random.choice(self.json_datax["groups"])
+        logger.info(f"Navigating to group: {group}")
+        print(f"Navigation vers le groupe : {group}")
+        self.set_page(group)
+        self.random_sleep(3, 5)
 
-            try:
-                logger.info("Refreshing the page...")
-                print("Rafraîchissement de la page...")
-                self.refresh_selenium()
-            except Exception as e:
-                logger.error(f'Erreur lors du rafraîchissement de la page : {e}')
-                continue  # Passer au groupe suivant en cas d'erreur
+        try:
+            logger.info("Refreshing the page...")
+            print("Rafraîchissement de la page...")
+            self.refresh_selenium()
+        except Exception as e:
+            logger.error(f'Erreur lors du rafraîchissement de la page : {e}')
+            return
 
-            # Choisir un post aléatoire
-            post_text = random.choice(self.json_datax["posts"])
-            logger.info(f"Selected post text: {post_text}")
-            print(f"Texte du post sélectionné : {post_text}")
+        # Choisir un post aléatoire
+        post_text = random.choice(self.json_datax["posts"])
+        logger.info(f"Selected post text: {post_text}")
+        print(f"Texte du post sélectionné : {post_text}")
 
-            # Choisir jusqu'à 30 images aléatoires
-            post_images = random.sample(self.json_datax["images"], min(30, len(self.json_datax["images"])))
-            logger.info(f"Selected images: {post_images}")
-            print(f"Images sélectionnées : {post_images}")
+        # Choisir jusqu'à 30 images aléatoires
+        post_images = random.sample(self.json_datax["images"], min(30, len(self.json_datax["images"])))
+        logger.info(f"Selected images: {post_images}")
+        print(f"Images sélectionnées : {post_images}")
 
-            # Ouvrir la zone de texte pour le post
-            try:
-                logger.info("Opening text input...")
-                print("Ouverture de la zone de texte...")
-                WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, self.selectors["display_input"]))
-                ).click()
-            except TimeoutException:
-                logger.error("L'élément 'display_input' n'est pas devenu interactif après 10 secondes.")
-                continue  # Passer au groupe suivant en cas d'erreur
-            except Exception as e:
-                logger.error(f'Erreur en ouvrant la zone de texte : {e}')
-                continue  # Passer au groupe suivant en cas d'erreur
+        # Ouvrir la zone de texte pour le post
+        try:
+            logger.info("Opening text input...")
+            print("Ouverture de la zone de texte...")
+            WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, self.selectors["display_input"]))
+            ).click()
+        except TimeoutException:
+            logger.error("L'élément 'display_input' n'est pas devenu interactif après 10 secondes.")
+            return
+        except Exception as e:
+            logger.error(f'Erreur en ouvrant la zone de texte : {e}')
+            return
 
-            self.random_sleep()
+        self.random_sleep()
 
-            # Écrire le texte du post
-            try:
-                logger.info("Writing post text...")
-                print("Écriture du texte du post...")
-                self.send_data(self.selectors["input"], post_text)
-            except Exception as e:
-                logger.error(f'Erreur en écrivant le texte : {e}')
-                continue  # Passer au groupe suivant en cas d'erreur
+        # Écrire le texte du post
+        try:
+            logger.info("Writing post text...")
+            print("Écriture du texte du post...")
+            self.send_data(self.selectors["input"], post_text)
+        except Exception as e:
+            logger.error(f'Erreur en écrivant le texte : {e}')
+            return
 
-            # Télécharger les images
-            self.upload_images_parallel([self.get_absolute_path(img) for img in post_images])
+        # Télécharger les images
+        self.upload_images_parallel([self.get_absolute_path(img) for img in post_images])
 
-            # Soumettre le post
-            try:
-                logger.info("Submitting post...")
-                print("Soumission du post...")
-                self.click_js(self.selectors["submit"])
-            except Exception as e:
-                logger.error(f'Erreur en soumettant le post : {e}')
-                continue  # Passer au groupe suivant en cas d'erreur
+        # Soumettre le post
+        try:
+            logger.info("Submitting post...")
+            print("Soumission du post...")
+            self.click_js(self.selectors["submit"])
+        except Exception as e:
+            logger.error(f'Erreur en soumettant le post : {e}')
+            return
 
-            # Logs
-            logger.info(f'Post réussi : "{post_text}" ({group})')
-            print(f'Post réussi : "{post_text}" ({group})')
-            posts_done.append([group, post_text])
+        # Logs
+        logger.info(f'Post réussi : "{post_text}" ({group})')
+        print(f'Post réussi : "{post_text}" ({group})')
+        posts_done.append([group, post_text])
 
-            # Ajouter un commentaire au post
-            comment_text = random.choice(self.json_datax["posts"])  # Utiliser un texte aléatoire pour le commentaire
-            self.post_comment(self.driver.current_url, comment_text)
-
-            # Attendre avant de poster dans un autre groupe
-            sleep(WAIT_MIN * 60)
-            
-            
-            """Publie un post aléatoire dans un groupe aléatoire avec plusieurs images."""
-            posts_done = []
-
-            # Choisir un groupe aléatoire
-            group = random.choice(self.json_datax["groups"])
-            logger.info(f"Navigating to group: {group}")
-            print(f"Navigation vers le groupe : {group}")
-            self.set_page(group)
-            self.random_sleep(3, 5)
-
-            try:
-                logger.info("Refreshing the page...")
-                print("Rafraîchissement de la page...")
-                self.refresh_selenium()
-            except Exception as e:
-                logger.error(f'Erreur lors du rafraîchissement de la page : {e}')
-                return
-
-            # Choisir un post aléatoire
-            post_text = random.choice(self.json_datax["posts"])
-            logger.info(f"Selected post text: {post_text}")
-            print(f"Texte du post sélectionné : {post_text}")
-
-            # Choisir jusqu'à 30 images aléatoires
-            post_images = random.sample(self.json_datax["images"], min(30, len(self.json_datax["images"])))
-            logger.info(f"Selected images: {post_images}")
-            print(f"Images sélectionnées : {post_images}")
-
-            # Ouvrir la zone de texte pour le post
-            try:
-                logger.info("Opening text input...")
-                print("Ouverture de la zone de texte...")
-                WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, self.selectors["display_input"]))
-                ).click()
-            except TimeoutException:
-                logger.error("L'élément 'display_input' n'est pas devenu interactif après 10 secondes.")
-                return
-            except Exception as e:
-                logger.error(f'Erreur en ouvrant la zone de texte : {e}')
-                return
-
-            self.random_sleep()
-
-            # Écrire le texte du post
-            try:
-                logger.info("Writing post text...")
-                print("Écriture du texte du post...")
-                self.send_data(self.selectors["input"], post_text)
-            except Exception as e:
-                logger.error(f'Erreur en écrivant le texte : {e}')
-                return
-
-            # Télécharger les images
-            self.upload_images_parallel([self.get_absolute_path(img) for img in post_images])
-
-            # Soumettre le post
-            try:
-                logger.info("Submitting post...")
-                print("Soumission du post...")
-                self.click_js(self.selectors["submit"])
-            except Exception as e:
-                logger.error(f'Erreur en soumettant le post : {e}')
-                return
-
-            # Logs
-            logger.info(f'Post réussi : "{post_text}" ({group})')
-            print(f'Post réussi : "{post_text}" ({group})')
-            posts_done.append([group, post_text])
-
-            # Ajouter un commentaire au post
-            comment_text = random.choice(self.json_datax["posts"])  # Utiliser un texte aléatoire pour le commentaire
-            self.post_comment(self.driver.current_url, comment_text)
-
-            # Attendre avant de poster dans un autre groupe
-            sleep(WAIT_MIN * 60)
+        # Attendre avant de poster dans un autre groupe
+        sleep(WAIT_MIN * 60)
 
     def post_in_groups(self):
         """Publie un post aléatoire dans chaque groupe avec une seule image."""
@@ -393,10 +279,6 @@ class Scraper(WebScraping):
             logger.info(f'Post réussi : "{post_text}" ({group})')
             print(f'Post réussi : "{post_text}" ({group})')
             posts_done.append([group, post_text])
-
-            # Ajouter un commentaire au post
-            comment_text = random.choice(self.json_data["posts"])  # Utiliser un texte aléatoire pour le commentaire
-            self.post_comment(self.driver.current_url, comment_text)
 
             # Attendre avant de poster dans un autre groupe
             sleep(WAIT_MIN * 11)
