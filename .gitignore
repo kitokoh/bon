@@ -15,3 +15,10 @@ media/
 .vscode
 
 !env1
+
+# Ignorer les fichiers compilés
+env1/**/*.pyd
+env1/**/*.so
+env1/**/*.dll
+env1/**/*.pyc
+env1/**/__pycache__/
