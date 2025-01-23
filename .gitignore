@@ -14,7 +14,6 @@ db.*
 media/
 .vscode
 
-!env1/
 
 # Ignorer les fichiers compilés
 env1/**/*.pyd

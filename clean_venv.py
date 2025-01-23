@@ -4,7 +4,7 @@ import shutil
 def clean_venv(venv_path):
     for root, dirs, files in os.walk(venv_path):
         for file in files:
-            if file.endswith(('.pyd', '.so', '.dll', '.pyc')):
+            if file.endswith(('.pyd', '.so', '.dll', '.pyc',"__pycache__",  ".pyo")):
                 file_path = os.path.join(root, file)
                 print(f"Deleting: {file_path}")
                 os.remove(file_path)
