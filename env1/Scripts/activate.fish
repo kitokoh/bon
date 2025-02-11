@@ -33,7 +33,11 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
+<<<<<<< HEAD
 set -gx VIRTUAL_ENV 'C:\Users\Administrator\bon\env1'
+=======
+set -gx VIRTUAL_ENV 'D:\nova360\lang\instancesLab\bon\env1'
+>>>>>>> c9ba7d302208764d82a1218f7368eb37bb590766
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"Scripts $PATH

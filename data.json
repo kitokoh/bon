@@ -3,7 +3,15 @@
 
       {
           "text": "Media Description",
+<<<<<<< HEAD
 "image": "C:\\Users\\Administrator\\Downloads\\AI-FB-Robot\\media\\mediaRobotArabic\\8.jpg"
+=======
+          "image": "media1\\1.jpg"
+      },
+      {
+          "text": "Media Description",
+          "image": "C:\\Users\\cheic\\Downloads\\AI-FB-Robot\\media\\media1\\2.png"
+>>>>>>> c9ba7d302208764d82a1218f7368eb37bb590766
       }
   ],
   "groups": [
