@@ -33,7 +33,7 @@ try:
         print("Licence valide. Démarrage du script principal...")
         scraper = Scraper()
 
-        keyword = input("Enter keyword: ")
+        keyword = input("Press")
         scraper.save_groups(keyword)
     else:
         print("Licence invalide ou expirée. Fermeture de l'application.")

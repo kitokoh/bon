@@ -1,12 +1,9 @@
 {
   "posts": [
+
       {
           "text": "Media Description",
-          "image": "media1\\1.jpg"
-      },
-      {
-          "text": "Media Description",
-          "image": "media1\\2.jpg"
+"image": "C:\\Users\\Administrator\\Downloads\\AI-FB-Robot\\media\\mediaRobotArabic\\8.jpg"
       }
   ],
   "groups": [

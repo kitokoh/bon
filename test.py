@@ -1,5 +1,3 @@
-
-
 import os
 import json
 import random
@@ -15,6 +13,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, ElementNotInteractableException
 from libs.automate import WebScraping
+import emoji  # Bibliothèque pour gérer les émojis
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -177,7 +176,9 @@ class Scraper(WebScraping):
         try:
             logger.info("Writing post text...")
             print("Écriture du texte du post...")
-            self.send_data(self.selectors["input"], post_text)
+            # Utiliser la bibliothèque emoji pour garantir une gestion correcte des émojis
+            cleaned_text = emoji.demojize(post_text)  # Convertit les émojis en texte
+            self.send_data(self.selectors["input"], cleaned_text.encode('utf-8').decode('utf-8'))
         except Exception as e:
             logger.error(f'Erreur en écrivant le texte : {e}')
             return
@@ -190,6 +191,15 @@ class Scraper(WebScraping):
             logger.info("Submitting post...")
             print("Soumission du post...")
             self.click_js(self.selectors["submit"])
+
+            # Attendre que le post soit envoyé
+            WebDriverWait(self.driver, 30).until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, self.selectors["submit"]))
+            )
+            logger.info("Post envoyé avec succès.")
+        except TimeoutException:
+            logger.error("Le post n'a pas été envoyé dans le délai imparti.")
+            return
         except Exception as e:
             logger.error(f'Erreur en soumettant le post : {e}')
             return
@@ -235,7 +245,9 @@ class Scraper(WebScraping):
             try:
                 logger.info("Writing post text...")
                 print("Écriture du texte du post...")
-                self.send_data(self.selectors["input"], post_text)
+                # Utiliser la bibliothèque emoji pour garantir une gestion correcte des émojis
+                cleaned_text = emoji.demojize(post_text)  # Convertit les émojis en texte
+                self.send_data(self.selectors["input"], cleaned_text.encode('utf-8').decode('utf-8'))
             except Exception as e:
                 logger.error(f'Erreur en écrivant le texte : "{post_text}" ({group}) : {e}')
                 continue
@@ -271,6 +283,15 @@ class Scraper(WebScraping):
                 logger.info("Submitting post...")
                 print("Soumission du post...")
                 self.click_js(self.selectors["submit"])
+
+                # Attendre que le post soit envoyé
+                WebDriverWait(self.driver, 30).until(
+                    EC.invisibility_of_element_located((By.CSS_SELECTOR, self.selectors["submit"]))
+                )
+                logger.info("Post envoyé avec succès.")
+            except TimeoutException:
+                logger.error("Le post n'a pas été envoyé dans le délai imparti.")
+                continue
             except Exception as e:
                 logger.error(f'Erreur en soumettant le post : "{post_text}" ({group}) : {e}')
                 continue
@@ -283,61 +304,20 @@ class Scraper(WebScraping):
             # Attendre avant de poster dans un autre groupe
             sleep(WAIT_MIN * 11)
 
-    # def save_groups(self, keyword):
-    #     """Recherche et enregistre les groupes correspondant à un mot-clé."""
-    #     logger.info("Searching groups...")
-    #     print(f"Recherche des groupes pour le mot-clé : {keyword}")
-    #     search_page = f"https://www.facebook.com/groups/search/groups/?q={keyword}"
-    #     self.set_page(search_page)
-    #     sleep(3)
-
-    #     links_num = 0
-    #     tries_count = 0
-
-    #     # Faire défiler pour charger tous les groupes
-    #     while True:
-    #         self.go_bottom()
-    #         new_links_num = len(self.get_elems(self.selectors["group_link"]))
-    #         if new_links_num == links_num:
-    #             tries_count += 1
-    #         else:
-    #             links_num = new_links_num
-    #             self.refresh_selenium()
-
-    #         if tries_count == 3:
-    #             break
-
-    #     # Récupérer tous les liens des groupes
-    #     links = self.get_attribs(self.selectors["group_link"], "href")
-    #     logger.info(f"{len(links)} groupes trouvés et enregistrés")
-    #     print(f"{len(links)} groupes trouvés et enregistrés")
-
-    #     # Enregistrer les liens dans le fichier JSON
-    #     if links:
-    #         self.json_data["groups"] = links
-    #         with open(self.data_path, "w", encoding="UTF-8") as file:
-    #             json.dump(self.json_data, file, indent=4)
     def save_groups(self, keyword):
-        """ Sedarch already signed groups and save them in data file """
-
-        # Set groups page
+        """Recherche et enregistre les groupes correspondant à un mot-clé."""
         logger.info("Searching groups...")
         search_page = f"https://www.facebook.com/groups/search/groups/?q={keyword}"
         self.set_page(search_page)
         sleep(3)
-        self.refresh_selenium()
 
         links_num = 0
         tries_count = 0
 
-        selectors = {
-            "group_link": '.x1yztbdb div[role="article"] a[aria-label="Visit"]',
-        }
-
-        # Scroll for show already logged groups
+        # Faire défiler pour charger tous les groupes
         while True:
             self.go_bottom()
-            new_links_num = len(self.get_elems(selectors["group_link"]))
+            new_links_num = len(self.get_elems(self.selectors["group_link"]))
             if new_links_num == links_num:
                 tries_count += 1
             else:
@@ -347,15 +327,17 @@ class Scraper(WebScraping):
             if tries_count == 3:
                 break
 
-        # Get all link of the groups
-        links = self.get_attribs(selectors["group_link"], "href")
-        logger.info(f"{len(links)} groups found and saved")
+        # Récupérer tous les liens des groupes
+        links = self.get_attribs(self.selectors["group_link"], "href")
+        logger.info(f"{len(links)} groupes trouvés et enregistrés")
+        print(f"{len(links)} groupes trouvés et enregistrés")
 
-        # Save links in jdon file
+        # Enregistrer les liens dans le fichier JSON
         if links:
             self.json_data["groups"] = links
             with open(self.data_path, "w", encoding="UTF-8") as file:
-                file.write(json.dumps(self.json_data, indent=4))
+                json.dump(self.json_data, file, indent=4)
+
 # Exemple d'utilisation
 if __name__ == "__main__":
     scraper = Scraper()
