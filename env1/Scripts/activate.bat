@@ -8,11 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-<<<<<<< HEAD
 set "VIRTUAL_ENV=C:\Users\Administrator\bon\env1"
-=======
-set "VIRTUAL_ENV=D:\nova360\lang\instancesLab\bon\env1"
->>>>>>> c9ba7d302208764d82a1218f7368eb37bb590766
 
 if not defined PROMPT set PROMPT=$P$G
 
