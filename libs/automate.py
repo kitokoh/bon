@@ -57,7 +57,7 @@ class WebScraping ():
         self.__web_page__ = None
         if start_killing:
             print("\nTry to kill chrome...")
-            command = 'taskkill /IM "chrome.exee" /F'
+            command = 'taskkill /IM "chrome.exe" /F'
             os.system(command)
             print("Ok\n")
         if self.__start_openning__:
