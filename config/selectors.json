@@ -1,43 +1,15 @@
 {
-    "display_input": [
-        "span + [role=\"button\"]",
-        "[aria-label*=\"Write something\"]",
-        "//span[contains(text(), 'Write something')]"
-    ],
-    "input": [
-        "div.notranslate._5rpu[role=\"textbox\"]",
-        "//div[@role='textbox' and contains(@class, 'notranslate')]"
-    ],
-    "display_themes": [
-        "div[aria-label*=\"Show Background Options\"]",
-        "//div[contains(@aria-label, 'Show Background Options')]"
-    ],
-    "theme": [
-        "div.x1qjc9v5.x78zum5.x1q0g3np.xozqiw3.xcud41i.x139jcc6.x1n2onr6.xl56j7k > div:nth-child(index) > div[aria-pressed=\"false\"]",
-        "//div[contains(@class, 'x1qjc9v5') and .//div[@aria-pressed='false']]"
-    ],
-    "show_image_input": [
-        "[aria-label*=\"Photo/video\"]",
-        "//*[contains(@aria-label, 'Photo/video')]"
-    ],
-    "add_image": [
-        "input[type=\"file\"][accept^=\"image/*\"]",
-        "//input[@type='file' and starts-with(@accept, 'image/*')]"
-    ],
-    "submit": [
-        "[aria-label*=\"Post\"][role=\"button\"]",
-        "//*[contains(@aria-label, 'Post') and @role='button']"
-    ],
-    "comment_input": [
-        "div[aria-label='Write a comment']",
-        "//div[@aria-label='Write a comment']"
-    ],
-    "submit_comment": [
-        "div[aria-label='Post comment']",
-        "//div[@aria-label='Post comment']"
-    ],
-    "group_link": [
-        "a[role='link'][href*='/groups/']",
-        "//a[@role='link' and contains(@href, '/groups/')]"
-    ]
+    "display_input": "span + [role=\"button\"]",
+    "input": "div.notranslate._5rpu[role=\"textbox\"]",
+    "display_themes": "div[aria-label*=\"Show Background Options\"], div[aria-label*=\"Afficher les options d'arrière-plan\"], div[aria-label*=\"Arka Plan Seçeneklerini Göster\"], div[aria-label*=\"عرض خيارات الخلفية\"], div[aria-label*=\"Mostrar opciones de fondo\"], div[aria-label*=\"Hintergrundoptionen anzeigen\"], div[aria-label*=\"Mostra opzioni di sfondo\"], div[aria-label*=\"背景オプションを表示\"], div[aria-label*=\"배경 옵션 표시\"], div[aria-label*=\"显示背景选项\"], div[aria-label*=\"Vis baggrundsalternativer\"], div[aria-label*=\"Mostrar opções de fundo\"], div[aria-label*=\"Zobrazit možnosti pozadí\"], div[aria-label*=\"Näytä taustavaihtoehdot\"], div[aria-label*=\"Εμφάνιση επιλογών φόντου\"], div[aria-label*=\"הצג אפשרויות רקע\"], div[aria-label*=\"Visa bakgrundsalternativ\"], div[aria-label*=\"Prikaži opcije pozadine\"], div[aria-label*=\"Rodyti fono parinktis\"], div[aria-label*=\"Prikaži možnosti ozadja\"], div[aria-label*=\"Mutassa a háttérbeállításokat\"], div[aria-label*=\"Prikaži opcije pozadine\"], div[aria-label*=\"Zobraziť možnosti pozadia\"], div[aria-label*=\"Prikaži opcije pozadine\"]",
+    "theme": "div.x1qjc9v5.x78zum5.x1q0g3np.xozqiw3.xcud41i.x139jcc6.x1n2onr6.xl56j7k > div:nth-child(index) > div[aria-pressed=\"false\"]",
+    "show_image_input": "[aria-label*=\"Photo/video\"], [aria-label*=\"Photo/vidéo\"], [aria-label*=\"Fotoğraf/video\"], [aria-label*=\"صورة/فيديو\"], [aria-label*=\"Foto/video\"], [aria-label*=\"Bild/Video\"], [aria-label*=\"Foto/video\"], [aria-label*=\"画像/動画\"], [aria-label*=\"사진/동영상\"], [aria-label*=\"图片/视频\"], [aria-label*=\"Foto/video\"], [aria-label*=\"Fotografie/video\"], [aria-label*=\"Kuva/video\"], [aria-label*=\"Εικόνα/βίντεο\"], [aria-label*=\"תמונה/וידאו\"], [aria-label*=\"Bilde/video\"], [aria-label*=\"Slika/video\"], [aria-label*=\"Nuotrauka/vaizdo įrašas\"], [aria-label*=\"Slike/video\"], [aria-label*=\"Kép/videó\"], [aria-label*=\"Slike/video\"], [aria-label*=\"Obrázok/video\"], [aria-label*=\"Slike/video\"]",
+    "add_image": "input[type=\"file\"][accept^=\"image/*\"]",
+    "submit": "[aria-label*=\"Post\"][role=\"button\"], [aria-label*=\"Publier\"][role=\"button\"], [aria-label*=\"Paylaş\"][role=\"button\"], [aria-label*=\"نشر\"][role=\"button\"], [aria-label*=\"Publicar\"][role=\"button\"], [aria-label*=\"Beitrag\"][role=\"button\"], [aria-label*=\"Pubblica\"][role=\"button\"], [aria-label*=\"投稿\"][role=\"button\"], [aria-label*=\"게시\"][role=\"button\"], [aria-label*=\"发布\"][role=\"button\"], [aria-label*=\"Indlæg\"][role=\"button\"], [aria-label*=\"Publicar\"][role=\"button\"], [aria-label*=\"Příspěvek\"][role=\"button\"], [aria-label*=\"Lähetä\"][role=\"button\"], [aria-label*=\"Δημοσίευση\"][role=\"button\"], [aria-label*=\"פרסום\"][role=\"button\"], [aria-label*=\"Inlägg\"][role=\"button\"], [aria-label*=\"Objavi\"][role=\"button\"], [aria-label*=\"Paskelbti\"][role=\"button\"], [aria-label*=\"Objavi\"][role=\"button\"], [aria-label*=\"Bejegyzés\"][role=\"button\"], [aria-label*=\"Objavi\"][role=\"button\"], [aria-label*=\"Príspevok\"][role=\"button\"], [aria-label*=\"Objavi\"][role=\"button\"]",
+    "comment_input": "div[aria-label='Write a comment'], div[aria-label='Écrire un commentaire'], div[aria-label='Yorum yazın'], div[aria-label='اكتب تعليقًا'], div[aria-label='Escribir un comentario'], div[aria-label='Schreibe einen Kommentar'], div[aria-label='Scrivi un commento'], div[aria-label='コメントを入力'], div[aria-label='댓글 입력'], div[aria-label='写评论'], div[aria-label='Skriv en kommentar'], div[aria-label='Escrever um comentário'], div[aria-label='Napsat komentář'], div[aria-label='Kirjoita kommentti'], div[aria-label='Γράψτε ένα σχόλιο'], div[aria-label='כתוב תגובה'], div[aria-label='Skriv en kommentar'], div[aria-label='Napiši komentar'], div[aria-label='Rašyti komentarą'], div[aria-label='Napiši komentar'], div[aria-label='Írj hozzászólást'], div[aria-label='Napiši komentar'], div[aria-label='Napíšte komentár'], div[aria-label='Napiši komentar']",
+    "submit_comment": "div[aria-label='Press Enter to post.'], div[aria-label='Appuyez sur Entrée pour publier.'], div[aria-label='Enter tuşuna basarak gönder.'], div[aria-label='اضغط Enter للنشر.'], div[aria-label='Presiona Enter para publicar.'], div[aria-label='Drücke Enter, um zu posten.'], div[aria-label='Premi Invio per pubblicare.'], div[aria-label='Enterキーを押して投稿。'], div[aria-label='Enter 키를 눌러 게시.'], div[aria-label='按 Enter 发布。'], div[aria-label='Tryk på Enter for at sende.'], div[aria-label='Pressione Enter para publicar.'], div[aria-label='Stiskněte Enter pro odeslání.'], div[aria-label='Paina Enter lähettääksesi.'], div[aria-label='Πατήστε Enter για δημοσίευση.'], div[aria-label='לחץ Enter כדי לפרסם.'], div[aria-label='Tryck på Enter för att posta.'], div[aria-label='Pritisnite Enter za objavu.'], div[aria-label='Paspauskite Enter, kad paskelbtumėte.'], div[aria-label='Pritisnite Enter za objavo.'], div[aria-label='Nyomja meg az Enter billentyűt a közzétételhez.'], div[aria-label='Pritisnite Enter za objavo.'], div[aria-label='Stlačte Enter na odoslanie.'], div[aria-label='Pritisnite Enter za objavo.']",
+    "like_button": "div[aria-label='Like'], div[aria-label='J’aime'], div[aria-label='Beğen'], div[aria-label='أعجبني'], div[aria-label='Me gusta'], div[aria-label='Gefällt mir'], div[aria-label='Mi piace'], div[aria-label='いいね！'], div[aria-label='좋아요'], div[aria-label='赞'], div[aria-label='Synes godt om'], div[aria-label='Curtir'], div[aria-label='To se mi líbí'], div[aria-label='Tykkää'], div[aria-label='Μου αρέσει'], div[aria-label='אהבתי'], div[aria-label='Gilla'], div[aria-label='Sviđa mi se'], div[aria-label='Patinka'], div[aria-label='Všeč mi je'], div[aria-label='Kedvelem'], div[aria-label='Líbí se mi'], div[aria-label='To se mi líbí'], div[aria-label='Mi piace'], div[aria-label='Líbí se mi']",
+    "share_button": "div[aria-label='Share'], div[aria-label='Partager'], div[aria-label='Paylaş'], div[aria-label='مشاركة'], div[aria-label='Compartir'], div[aria-label='Teilen'], div[aria-label='Condividi'], div[aria-label='シェア'], div[aria-label='공유'], div[aria-label='分享'], div[aria-label='Del'], div[aria-label='Compartilhar'], div[aria-label='Sdílet'], div[aria-label='Jaa'], div[aria-label='Κοινοποίηση'], div[aria-label='שיתוף'], div[aria-label='Dela'], div[aria-label='Podijeli'], div[aria-label='Dalintis'], div[aria-label='Deli'], div[aria-label='Megosztás'], div[aria-label='Sdílet'], div[aria-label='Condividi'], div[aria-label='Sdílet']",
+    "message_input": "div[aria-label='Write a message'], div[aria-label='Écrire un message'], div[aria-label='Mesaj yazın'], div[aria-label='اكتب رسالة'], div[aria-label='Escribir mensaje'], div[aria-label='Nachricht schreiben'], div[aria-label='Scrivi un messaggio'], div[aria-label='メッセージを書く'], div[aria-label='메시지 작성'], div[aria-label='写消息'], div[aria-label='Skriv en besked'], div[aria-label='Escrever uma mensagem'], div[aria-label='Napsat zprávu'], div[aria-label='Kirjoita viesti'], div[aria-label='Γράψτε ένα μήνυμα'], div[aria-label='כתוב הודעה'], div[aria-label='Skriv ett meddelande'], div[aria-label='Napiši poruku'], div[aria-label='Parašykite žinutę'], div[aria-label='Napiši sporočilo'], div[aria-label='Üzenet írása'], div[aria-label='Napište zprávu'], div[aria-label='Scrivi un messaggio'], div[aria-label='Napište zprávu']",
+    "send_message_button": "div[aria-label='Send'], div[aria-label='Envoyer'], div[aria-label='Gönder'], div[aria-label='إرسال'], div[aria-label='Enviar'], div[aria-label='Senden'], div[aria-label='Invia'], div[aria-label='送信'], div[aria-label='보내기'], div[aria-label='发送'], div[aria-label='Send'], div[aria-label='Enviar'], div[aria-label='Odeslat'], div[aria-label='Lähetä'], div[aria-label='Αποστολή'], div[aria-label='שלח'], div[aria-label='Skicka'], div[aria-label='Pošalji'], div[aria-label='Siųsti'], div[aria-label='Pošlji'], div[aria-label='Küldés'], div[aria-label='Poslat'], div[aria-label='Invia'], div[aria-label='Poslat']"
 }
