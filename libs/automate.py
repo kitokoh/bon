@@ -344,55 +344,98 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 
 # ... (le reste des imports et le début de la classe) ...
 
-    def send_data(self, selector, data):
-        """Send data to an input field with StaleElementReferenceException handling."""
-        logger.info(f"[WebScraping.send_data] Attempting to send data to element with selector: {selector}")
-        for attempt in range(2): # Try twice
-            try:
-                elem = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                )
-                elem.clear() # Clear before sending keys, good practice
-                elem.send_keys(data)
-                logger.info(f"[WebScraping.send_data] Data successfully sent to element: {selector} on attempt {attempt + 1}")
-                return
-            except StaleElementReferenceException as e_stale:
-                logger.warning(f"[WebScraping.send_data] StaleElementReferenceException on attempt {attempt + 1} for selector '{selector}': {e_stale}. Retrying...")
-                if attempt == 1: # Last attempt
-                    logger.error(f"[WebScraping.send_data] StaleElementReferenceException persisted after retries for selector '{selector}'.")
+    def send_data(self, selector_input, data): # Renamed selector to selector_input
+        """Send data to an input field, trying a list of selectors if provided. Handles StaleElementReferenceException."""
+        logger.info(f"[WebScraping.send_data] Attempting to send data to element with selector(s): {selector_input}")
+
+        element_to_send_to = None
+        used_selector = "" # For logging the selector that ultimately worked or failed
+
+        try:
+            element_to_send_to = self.get_elem(selector_input) # Handles list of selectors
+            used_selector = selector_input # Simplified for now, get_elem logs the one that worked
+
+            # Now, perform the send_keys action with StaleElement retry
+            for attempt in range(2):
+                try:
+                    # Ensure the element is present/visible before interacting (get_elem should ensure presence)
+                    # A quick wait for visibility/interactability might be good here if not covered by get_elem's EC.presence_of_element_located
+                    WebDriverWait(self.driver, 5).until(EC.visibility_of(element_to_send_to)) # Check visibility
+                    element_to_send_to.clear()
+                    element_to_send_to.send_keys(data)
+                    logger.info(f"[WebScraping.send_data] Data successfully sent to element found by '{used_selector}' on attempt {attempt + 1}")
+                    return
+                except StaleElementReferenceException as e_stale:
+                    logger.warning(f"[WebScraping.send_data] StaleElementReferenceException on send_data attempt {attempt + 1} for element found by '{used_selector}': {e_stale}. Retrying find and send...")
+                    if attempt == 1:
+                        logger.error(f"[WebScraping.send_data] StaleElementReferenceException persisted after retries for element found by '{used_selector}'.")
+                        raise
+                    time.sleep(0.5)
+                    element_to_send_to = self.get_elem(selector_input) # Re-find
+                except (TimeoutException, ElementNotInteractableException) as e_interact: # If element becomes non-interactable after find
+                    logger.error(f"[WebScraping.send_data] Element found by '{used_selector}' not interactable for send_data: {e_interact}")
                     raise
-                time.sleep(0.5) # Wait a bit before retrying
-            except Exception as e:
-                logger.error(f"[WebScraping.send_data] Failed to send data to element '{selector}' on attempt {attempt + 1}: {e}")
-                raise
-        # Should not be reached if successful or exception is raised
-        logger.error(f"[WebScraping.send_data] send_data failed for '{selector}' after all attempts.")
-        raise Exception(f"send_data failed for '{selector}' after all attempts.")
+
+            logger.error(f"[WebScraping.send_data] Send_data failed due to persistent StaleElementReferenceException for element found by '{used_selector}'.")
+            raise StaleElementReferenceException(f"Send_data failed due to persistent StaleElementReferenceException for '{used_selector}'.")
+
+        except (NoSuchElementException, TimeoutException, ValueError) as e_find:
+            logger.error(f"[WebScraping.send_data] Failed to find element to send data with selector(s) '{selector_input}': {e_find}")
+            raise
+        except Exception as e_general:
+            logger.error(f"[WebScraping.send_data] An unexpected error occurred while sending data using selector(s) '{selector_input}': {e_general}")
+            raise
 
 
-    def click(self, selector):
-        """Click on an element with StaleElementReferenceException handling."""
-        logger.info(f"[WebScraping.click] Attempting to click element with selector: {selector}")
-        for attempt in range(2): # Try twice
-            try:
-                element = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                )
-                element.click()
-                logger.info(f"[WebScraping.click] Successfully clicked element: {selector} on attempt {attempt + 1}")
-                return
-            except StaleElementReferenceException as e_stale:
-                logger.warning(f"[WebScraping.click] StaleElementReferenceException on attempt {attempt + 1} for selector '{selector}': {e_stale}. Retrying...")
-                if attempt == 1: # Last attempt
-                    logger.error(f"[WebScraping.click] StaleElementReferenceException persisted after retries for selector '{selector}'.")
-                    raise
-                time.sleep(0.5) # Wait a bit before retrying
-            except Exception as e:
-                logger.error(f"[WebScraping.click] Failed to click element '{selector}' on attempt {attempt + 1}: {e}")
-                raise
-        # Should not be reached
-        logger.error(f"[WebScraping.click] click failed for '{selector}' after all attempts.")
-        raise Exception(f"click failed for '{selector}' after all attempts.")
+    def click(self, selector_input): # Renamed selector to selector_input
+        """Click on an element, trying a list of selectors if provided. Handles StaleElementReferenceException."""
+        logger.info(f"[WebScraping.click] Attempting to click element with selector(s): {selector_input}")
+
+        element_to_click = None
+        used_selector = ""
+
+        try:
+            # Find the element using get_elem which handles list of selectors
+            # get_elem will raise an exception if no selector works, which will be caught below.
+            element_to_click = self.get_elem(selector_input)
+            # If get_elem was successful, selector_input might be a list,
+            # but element_to_click is the specific one found. We need to know which selector worked.
+            # For now, this detail is logged within get_elem. We'll use the original selector_input for logging here.
+            used_selector = selector_input # This isn't quite right if selector_input is a list.
+                                      # get_elem should ideally return which selector worked, or we log it there.
+                                      # For now, assume get_elem logs the successful selector.
+
+            # Now, ensure the found element is clickable and click it (with StaleElement retry)
+            for attempt in range(2): # Try click action twice for staleness
+                try:
+                    # Wait for the specific element (returned by get_elem) to be clickable
+                    WebDriverWait(self.driver, 5).until(EC.element_to_be_clickable(element_to_click))
+                    element_to_click.click()
+                    logger.info(f"[WebScraping.click] Successfully clicked element found by '{used_selector}' on attempt {attempt + 1}")
+                    return
+                except StaleElementReferenceException as e_stale:
+                    logger.warning(f"[WebScraping.click] StaleElementReferenceException on click attempt {attempt + 1} for element found by '{used_selector}': {e_stale}. Retrying find and click...")
+                    if attempt == 1:
+                        logger.error(f"[WebScraping.click] StaleElementReferenceException persisted after retries for element found by '{used_selector}'.")
+                        raise
+                    time.sleep(0.5)
+                    # Re-find the element before next click attempt
+                    element_to_click = self.get_elem(selector_input)
+                    # And re-assign used_selector if get_elem could return it (future improvement)
+                except TimeoutException as e_timeout_click: # Timeout waiting for element_to_click to be clickable
+                    logger.error(f"[WebScraping.click] Timeout waiting for element (found by '{used_selector}') to be clickable: {e_timeout_click}")
+                    raise # This is a non-stale error, re-raise
+
+            # If loop finishes, click failed due to staleness even after re-finding
+            logger.error(f"[WebScraping.click] Click failed due to persistent StaleElementReferenceException for element found by '{used_selector}'.")
+            raise StaleElementReferenceException(f"Click failed due to persistent StaleElementReferenceException for '{used_selector}'.")
+
+        except (NoSuchElementException, TimeoutException, ValueError) as e_find: # From get_elem or initial validation
+            logger.error(f"[WebScraping.click] Failed to find element to click with selector(s) '{selector_input}': {e_find}")
+            raise # Re-raise the find exception
+        except Exception as e_general: # Other unexpected errors
+            logger.error(f"[WebScraping.click] An unexpected error occurred while clicking using selector(s) '{selector_input}': {e_general}")
+            raise
 
 
     def wait_load(self, selector, time_out=10, refresh_back_tab=-1):
@@ -440,40 +483,53 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
             logger.error(f"[WebScraping.wait_die] Error waiting for element '{selector}' to disappear: {e}")
             raise
 
-    def get_text(self, selector):
-        """Get the text of an element."""
-        logger.info(f"[WebScraping.get_text] Attempting to get text from element: {selector}")
-        for attempt in range(2):
-            try:
-                elem = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                )
-                text_content = elem.text
-                logger.info(f"[WebScraping.get_text] Successfully retrieved text from '{selector}' on attempt {attempt + 1}. Length: {len(text_content)}.")
-                logger.debug(f"[WebScraping.get_text] Text from '{selector}': '{text_content[:100]}{'...' if len(text_content)>100 else ''}'")
-                return text_content
-            except StaleElementReferenceException as e_stale:
-                logger.warning(f"[WebScraping.get_text] StaleElementReferenceException on attempt {attempt + 1} for selector '{selector}': {e_stale}. Retrying...")
-                if attempt == 1:
-                    logger.error(f"[WebScraping.get_text] StaleElementReferenceException persisted for '{selector}'.")
-                    raise
-                time.sleep(0.5)
-            except NoSuchElementException: # This might be redundant if WebDriverWait is used, but good for clarity
-                logger.error(f"[WebScraping.get_text] Element '{selector}' not found (NoSuchElement).")
-                return None # Or raise
-            except TimeoutException:
-                logger.error(f"[WebScraping.get_text] Timeout waiting for element '{selector}' to be present.")
-                return None # Or raise
-            except Exception as e:
-                logger.error(f"[WebScraping.get_text] Error getting text from element '{selector}': {e}")
-                # Decide if to raise or return None based on how critical this is
-                if attempt == 1: raise # Raise on last attempt for general errors too
-        return None # Should not be reached if successful or exception raised
+    def get_text(self, selector_input):
+        """Get the text of an element, trying a list of selectors if provided. Handles StaleElementReferenceException."""
+        logger.info(f"[WebScraping.get_text] Attempting to get text from element with selector(s): {selector_input}")
+
+        element_to_get_text_from = None
+        # used_selector = "" # Not easily known which selector from list worked without modifying get_elem return
+
+        try:
+            element_to_get_text_from = self.get_elem(selector_input) # Handles list of selectors
+
+            for attempt in range(2): # StaleElement retry loop
+                try:
+                    # Ensure visibility before getting text (presence is ensured by get_elem)
+                    WebDriverWait(self.driver, 3).until(EC.visibility_of(element_to_get_text_from)) # Shorter wait, element is already found
+                    text_content = element_to_get_text_from.text
+                    # Log which selector worked if get_elem could return it. For now, use selector_input.
+                    logger.info(f"[WebScraping.get_text] Successfully retrieved text from element found by '{selector_input}' on attempt {attempt + 1}. Length: {len(text_content)}.")
+                    logger.debug(f"[WebScraping.get_text] Text: '{text_content[:100]}{'...' if len(text_content)>100 else ''}'")
+                    return text_content
+                except StaleElementReferenceException as e_stale:
+                    logger.warning(f"[WebScraping.get_text] StaleElementReferenceException on get_text attempt {attempt + 1} for element found by '{selector_input}': {e_stale}. Retrying find and get_text...")
+                    if attempt == 1: # Last attempt
+                        logger.error(f"[WebScraping.get_text] StaleElementReferenceException persisted for element found by '{selector_input}'.")
+                        raise
+                    time.sleep(0.5)
+                    element_to_get_text_from = self.get_elem(selector_input) # Re-find
+                except TimeoutException as e_timeout_text: # Timeout waiting for visibility
+                    logger.error(f"[WebScraping.get_text] Timeout waiting for element (found by '{selector_input}') to be visible for get_text: {e_timeout_text}")
+                    raise # This is a non-stale error from this specific interaction
+
+            # This part should ideally not be reached if StaleElementReferenceException is raised and not caught in the loop's final attempt
+            logger.error(f"[WebScraping.get_text] Get_text failed likely due to persistent StaleElementReferenceException for element found by '{selector_input}'.")
+            raise StaleElementReferenceException(f"Get_text failed after retries for '{selector_input}'.")
+
+        except (NoSuchElementException, TimeoutException, ValueError) as e_find:
+            logger.error(f"[WebScraping.get_text] Failed to find element to get text with selector(s) '{selector_input}': {e_find}")
+            raise
+        except Exception as e_general:
+            logger.error(f"[WebScraping.get_text] An unexpected error occurred while getting text using selector(s) '{selector_input}': {e_general}")
+            raise
 
 
-    def get_texts(self, selector):
+    def get_texts(self, selector_input): # Renamed selector to selector_input
         """Get the texts of multiple elements. StaleElement checks for individual elements within the loop."""
-        logger.info(f"[WebScraping.get_texts] Attempting to get texts from elements: {selector}")
+        # This method uses get_elems, which already handles lists of selectors.
+        # The StaleElement handling here is for individual elements within the returned list.
+        logger.info(f"[WebScraping.get_texts] Attempting to get texts from elements with selector(s): {selector_input}")
         texts = []
         try:
             elems = WebDriverWait(self.driver, 10).until(
@@ -605,42 +661,95 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 
     def get_elem(self, selector):
         """Get a single element."""
-        logger.info(f"[WebScraping.get_elem] Attempting to get element: {selector}")
-        try:
-            elem = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-            )
-            logger.info(f"[WebScraping.get_elem] Successfully retrieved element: {selector}")
-            return elem
-        except NoSuchElementException: # Might be redundant
-            logger.error(f"[WebScraping.get_elem] Element '{selector}' not found (NoSuchElement).")
-            return None
-        except TimeoutException:
-            logger.error(f"[WebScraping.get_elem] Timeout waiting for element '{selector}'.")
-            return None
-        except Exception as e:
-            logger.error(f"[WebScraping.get_elem] Error getting element '{selector}': {e}")
-            return None
+        logger.info(f"[WebScraping.get_elem] Attempting to get element with selector(s): {selector_input}")
+
+        if isinstance(selector_input, str):
+            selectors_to_try = [selector_input]
+        elif isinstance(selector_input, list):
+            selectors_to_try = selector_input
+        else:
+            logger.error(f"[WebScraping.get_elem] Invalid selector input type: {type(selector_input)}. Must be string or list.")
+            raise ValueError("Selector input must be a string or a list of strings.")
+
+        if not selectors_to_try:
+            logger.error("[WebScraping.get_elem] No selectors provided to find element.")
+            raise ValueError("No selectors provided.")
+
+        last_exception = None
+        for i, selector in enumerate(selectors_to_try):
+            logger.debug(f"[WebScraping.get_elem] Attempting with selector #{i+1}: '{selector}'")
+            try:
+                elem = WebDriverWait(self.driver, 10 if len(selectors_to_try) == 1 else 3).until( # Shorter timeout for list items
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                logger.info(f"[WebScraping.get_elem] Successfully retrieved element using selector: '{selector}'")
+                return elem
+            except TimeoutException as e_timeout:
+                last_exception = e_timeout
+                logger.debug(f"[WebScraping.get_elem] Timeout with selector '{selector}'.")
+            except NoSuchElementException as e_no_such: # Should be caught by TimeoutException from WebDriverWait
+                last_exception = e_no_such
+                logger.debug(f"[WebScraping.get_elem] NoSuchElement with selector '{selector}'.")
+            except Exception as e_general: # Catch any other unexpected error for a specific selector
+                last_exception = e_general
+                logger.error(f"[WebScraping.get_elem] Unexpected error with selector '{selector}': {e_general}")
+
+        # If loop finishes, all selectors failed
+        logger.error(f"[WebScraping.get_elem] Failed to find element after trying all selectors: {selectors_to_try}")
+        if last_exception:
+            raise last_exception # Raise the last exception encountered
+        else: # Should not happen if selectors_to_try is not empty
+            raise NoSuchElementException(f"Element not found with selectors: {selectors_to_try}")
 
 
-    def get_elems(self, selector):
-        """Get multiple elements."""
-        logger.info(f"[WebScraping.get_elems] Attempting to get multiple elements: {selector}")
-        try:
-            elems = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
-            )
-            logger.info(f"[WebScraping.get_elems] Successfully retrieved {len(elems)} elements for selector: {selector}")
-            return elems
-        except NoSuchElementException: # Might be redundant
-            logger.error(f"[WebScraping.get_elems] Elements with selector '{selector}' not found (NoSuchElement).")
-            return []
-        except TimeoutException:
-            logger.error(f"[WebScraping.get_elems] Timeout waiting for elements with selector '{selector}'.")
-            return []
-        except Exception as e:
-            logger.error(f"[WebScraping.get_elems] Error getting elements with selector '{selector}': {e}")
-            return []
+    def get_elems(self, selector_input):
+        """Get multiple elements. If selector_input is a list, uses the first successful selector."""
+        logger.info(f"[WebScraping.get_elems] Attempting to get multiple elements with selector(s): {selector_input}")
+
+        if isinstance(selector_input, str):
+            selectors_to_try = [selector_input]
+        elif isinstance(selector_input, list):
+            selectors_to_try = selector_input
+        else:
+            logger.error(f"[WebScraping.get_elems] Invalid selector input type: {type(selector_input)}. Must be string or list.")
+            raise ValueError("Selector input must be a string or a list of strings.")
+
+        if not selectors_to_try:
+            logger.error("[WebScraping.get_elems] No selectors provided to find elements.")
+            raise ValueError("No selectors provided.")
+
+        last_exception = None
+        for i, selector in enumerate(selectors_to_try):
+            logger.debug(f"[WebScraping.get_elems] Attempting with selector #{i+1}: '{selector}'")
+            try:
+                # For get_elems, we usually want to wait a reasonable time for the list to appear.
+                # If a list of selectors is provided, it implies trying alternatives if the primary one fails.
+                # The timeout here applies to each attempt.
+                elems = WebDriverWait(self.driver, 10 if len(selectors_to_try) == 1 else 5).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector))
+                )
+                if elems: # Ensure elems is not empty, though presence_of_all_elements_located should ensure this or timeout.
+                    logger.info(f"[WebScraping.get_elems] Successfully retrieved {len(elems)} elements using selector: {selector}")
+                    return elems
+                else: # Should ideally be caught by TimeoutException if no elements are found
+                    logger.debug(f"[WebScraping.get_elems] Selector '{selector}' resulted in an empty list of elements, trying next.")
+                    last_exception = NoSuchElementException(f"No elements found with selector '{selector}' although wait succeeded.")
+            except TimeoutException as e_timeout:
+                last_exception = e_timeout
+                logger.debug(f"[WebScraping.get_elems] Timeout with selector '{selector}'.")
+            except NoSuchElementException as e_no_such: # Should be caught by TimeoutException
+                last_exception = e_no_such
+                logger.debug(f"[WebScraping.get_elems] NoSuchElement with selector '{selector}'.")
+            except Exception as e_general:
+                last_exception = e_general
+                logger.error(f"[WebScraping.get_elems] Unexpected error with selector '{selector}': {e_general}")
+
+        logger.error(f"[WebScraping.get_elems] Failed to find elements after trying all selectors: {selectors_to_try}")
+        if last_exception:
+            raise last_exception
+        else:
+            raise NoSuchElementException(f"Elements not found with selectors: {selectors_to_try}")
+
 
     def set_page_js(self, web_page, new_tab=False):
         """Set the current page using JavaScript."""

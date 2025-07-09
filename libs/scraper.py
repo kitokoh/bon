@@ -195,57 +195,101 @@ class Scraper(WebScraping):
 
         logger.info(f"[Scraper.upload_image] Attempting to upload image: {image_path}")
         try:
+            # Utiliser _click_element_js qui gère la liste et le fallback pour "show_image_input"
             if not self._click_element_js("show_image_input", "bouton 'Photo/Vidéo'", method_name="upload_image"):
-                self._log_error("Impossible d'ouvrir le dialogue d'ajout d'image.", "upload_image")
+                self._log_error("Impossible d'ouvrir le dialogue d'ajout d'image (show_image_input).", "upload_image")
                 return False
-            self.random_sleep() # Has logging
+            self.random_sleep()
 
-            current_add_image_selector = self.selectors.get("add_image")
-            file_input = None
-            for attempt in range(2):
+            # Gérer la recherche de l'élément file_input avec fallback
+            add_image_selector_key = "add_image"
+            selector_config_value = self.selectors.get(add_image_selector_key)
+            if not selector_config_value:
+                self._log_error(f"Selector key '{add_image_selector_key}' not defined for file input.", "upload_image")
+                return False
+
+            selectors_to_try = []
+            if isinstance(selector_config_value, list):
+                selectors_to_try.extend(selector_config_value)
+            elif isinstance(selector_config_value, str):
+                selectors_to_try.append(selector_config_value)
+
+            file_input_element = None
+            last_exception_find = None
+
+            for i, sel_str in enumerate(selectors_to_try):
+                logger.debug(f"[Scraper.upload_image] Trying to find file input with selector #{i+1}: '{sel_str}'")
                 try:
-                    logger.debug(f"[Scraper.upload_image] Finding file input element (selector: {current_add_image_selector}) on attempt {attempt+1}")
-                    # We use a short explicit wait here as the element might appear after click_js
-                    file_input = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, current_add_image_selector))
+                    file_input_element = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, sel_str))
                     )
-                    logger.info(f"[Scraper.upload_image] File input element found with selector: {current_add_image_selector}")
-                    break # Found
-                except (TimeoutException, NoSuchElementException) as e_find:
-                    self._log_error(f"Attempt {attempt+1} to find file input '{current_add_image_selector}' failed: {e_find}", "upload_image")
-                    if attempt == 0:
-                        user_choice = self._handle_selector_failure_interactive(
-                            "add_image",
-                            "trouver le champ de fichier image",
-                            self.driver.current_url
-                        )
-                        if user_choice == "STOP_SCRIPT":
-                            raise SystemExit("[Scraper] Arrêt du script demandé par l'utilisateur via fallback manuel.")
-                        elif user_choice == "SKIP_ACTION":
-                            return False # Cannot proceed without file input
-                        elif user_choice:
-                            current_add_image_selector = user_choice
-                            logger.info(f"[Scraper.upload_image] Retrying find for file input with user-provided selector: {current_add_image_selector}")
-                            continue
-                        else: # User provided empty, stop or skip implicitly
-                            return False
-                    else: # Failed on second attempt
-                        self._log_error(f"User-provided selector '{current_add_image_selector}' also failed for file input.", "upload_image")
-                        return False
+                    logger.info(f"[Scraper.upload_image] File input element found with selector: {sel_str}")
+                    break # Element found
+                except (TimeoutException, NoSuchElementException) as e:
+                    last_exception_find = e
+                    logger.warning(f"[Scraper.upload_image] File input selector '{sel_str}' failed: {e}")
+                    if i < len(selectors_to_try) - 1:
+                        logger.info(f"[Scraper.upload_image] Trying next file input selector.")
+                    else:
+                        logger.error(f"[Scraper.upload_image] All configured file input selectors failed for key '{add_image_selector_key}'.")
 
-            if not file_input:
+            if not file_input_element and last_exception_find: # All configured selectors failed
+                user_choice = self._handle_selector_failure_interactive(
+                    add_image_selector_key,
+                    "trouver le champ de fichier image",
+                    self.driver.current_url
+                )
+                if user_choice == "STOP_SCRIPT":
+                    raise SystemExit("[Scraper] Arrêt du script demandé par l'utilisateur (file input).")
+                elif user_choice == "SKIP_ACTION":
+                    return False
+                elif user_choice:
+                    logger.info(f"[Scraper.upload_image] Retrying find for file input with user-provided selector: {user_choice}")
+                    try:
+                        file_input_element = WebDriverWait(self.driver, 5).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, user_choice))
+                        )
+                        logger.info(f"[Scraper.upload_image] File input element found with user-provided selector: {user_choice}")
+                        logger.info(f"SUCCESSFUL USER SELECTOR for '{add_image_selector_key}': {user_choice} (Original was: {selector_config_value})")
+                    except (TimeoutException, NoSuchElementException) as e_user:
+                        self._log_error(f"User-provided selector '{user_choice}' also failed for file input: {e_user}", "upload_image")
+                        return False
+                else: # User provided empty or unhandled
+                    return False
+
+            if not file_input_element:
                 self._log_error("File input element not found after all attempts.", "upload_image")
                 return False
 
             logger.debug(f"[Scraper.upload_image] Sending keys (image path) to file input: {image_path}")
-            file_input.send_keys(image_path) # This needs to be an absolute path for send_keys to work reliably
-            self.random_sleep()
-            logger.info(f"[Scraper.upload_image] Image '{image_path}' path sent to file input successfully.")
-            return True
-        except SystemExit: # Propagate SystemExit
+            # StaleElement retry for send_keys
+            for send_attempt in range(2):
+                try:
+                    file_input_element.send_keys(image_path)
+                    logger.info(f"[Scraper.upload_image] Image '{image_path}' path sent to file input successfully on attempt {send_attempt+1}.")
+                    self.random_sleep()
+                    return True
+                except StaleElementReferenceException as e_stale_send:
+                    logger.warning(f"[Scraper.upload_image] StaleElementReferenceException on send_keys attempt {send_attempt+1} for image '{image_path}'. Retrying find...")
+                    if send_attempt == 1:
+                        logger.error(f"[Scraper.upload_image] StaleElementReferenceException persisted on send_keys for '{image_path}'.")
+                        raise e_stale_send # Re-raise after final attempt
+                    time.sleep(0.5)
+                    # Re-finding the element is complex here as we don't know which selector worked or if it was user provided.
+                    # Simplest is to re-run the find logic. This is getting repetitive.
+                    # This indicates a need for a robust _find_element_interactive helper.
+                    # For now, let's just re-raise if it fails after one re-find attempt based on original logic.
+                    # This part can be improved by a helper that returns the element and the selector that worked.
+                    logger.error(f"[Scraper.upload_image] Cannot reliably re-find element for send_keys after Stale. Upload failed for {image_path}")
+                    return False # Or raise
+
+            # Should not be reached if send_keys is successful or StaleElement is re-raised
+            return False
+
+        except SystemExit:
             raise
         except Exception as e:
-            logger.error(f"[Scraper.upload_image] Error during image upload for '{image_path}': {e}")
+            logger.error(f"[Scraper.upload_image] Unexpected error during image upload for '{image_path}': {e}")
             return False
 
     def upload_images_parallel(self, image_paths):
@@ -734,94 +778,129 @@ class Scraper(WebScraping):
 
 
     def _click_element(self, selector_key, element_name, method_name=""):
-        """Tente de cliquer sur un élément. Gère l'échec de sélecteur de manière interactive."""
+        """
+        Tente de cliquer sur un élément.
+        Gère une liste de sélecteurs depuis config et l'échec interactif.
+        """
         parent_method_name = f"{method_name}._click_element" if method_name else "_click_element"
-        original_selector = self.selectors.get(selector_key)
 
-        if not original_selector:
-            self._log_error(f"Selector key '{selector_key}' not defined in config.", parent_method_name)
-            # Potentially call interactive handler here too if not finding the key is critical enough
-            # For now, assume keys are always present but selectors might be bad.
+        selector_config_value = self.selectors.get(selector_key)
+        if not selector_config_value:
+            self._log_error(f"Selector key '{selector_key}' not defined in config for element '{element_name}'.", parent_method_name)
             return False
 
-        logger.info(f"[Scraper.{parent_method_name}] Attempting to click element '{element_name}' (key: {selector_key}, selector: {original_selector})")
+        selectors_to_try = []
+        if isinstance(selector_config_value, list):
+            selectors_to_try.extend(selector_config_value)
+        elif isinstance(selector_config_value, str):
+            selectors_to_try.append(selector_config_value)
+        else:
+            self._log_error(f"Invalid selector format for key '{selector_key}' in config. Expected string or list.", parent_method_name)
+            return False
 
-        current_selector = original_selector
-        for attempt in range(2): # Allow one retry with user-provided selector
+        logger.info(f"[Scraper.{parent_method_name}] Attempting to click element '{element_name}' (key: {selector_key}, trying {len(selectors_to_try)} selector(s): {selectors_to_try})")
+
+        last_exception_from_automate = None
+        for i, selector_str in enumerate(selectors_to_try):
+            logger.debug(f"[Scraper.{parent_method_name}] Trying selector #{i+1} for '{element_name}': '{selector_str}'")
             try:
-                super().click(current_selector)
+                super().click(selector_str) # automate.py's click handles its own StaleElement retries for this selector_str
+                logger.info(f"[Scraper.{parent_method_name}] Successfully clicked '{element_name}' using selector: '{selector_str}'")
                 return True
-            except (TimeoutException, NoSuchElementException, ElementNotInteractableException, Exception) as e: # Catch broad exceptions from parent
-                self._log_error(f"Initial attempt to click '{element_name}' (selector: {current_selector}) failed: {e}", parent_method_name)
-                if attempt == 0: # Only ask user on the first failure of the original selector
-                    user_choice = self._handle_selector_failure_interactive(
-                        original_selector_key,
-                        f"cliquer sur '{element_name}'",
-                        self.driver.current_url
-                    )
-                    if user_choice == "STOP_SCRIPT":
-                        # Propagate a signal or raise a specific exception to stop the main process
-                        raise SystemExit("[Scraper] Arrêt du script demandé par l'utilisateur via fallback manuel.")
-                    elif user_choice == "SKIP_ACTION":
-                        return False # Action skipped
-                    elif user_choice: # New selector provided
-                        current_selector = user_choice # Use the new selector for the next attempt
-                        logger.info(f"[Scraper.{parent_method_name}] Retrying click on '{element_name}' with user-provided selector: {current_selector}")
-                        continue # Retry the loop with the new selector
-                    else: # User provided empty input or unhandled case
-                        return False # Could not get a new selector
-                else: # Failed on second attempt (with user selector)
-                    self._log_error(f"User-provided selector '{current_selector}' also failed for '{element_name}'.", parent_method_name)
+            except (TimeoutException, NoSuchElementException, ElementNotInteractableException, StaleElementReferenceException, Exception) as e:
+                last_exception_from_automate = e
+                logger.warning(f"[Scraper.{parent_method_name}] Selector '{selector_str}' failed for '{element_name}': {e}")
+                if i < len(selectors_to_try) - 1:
+                    logger.info(f"[Scraper.{parent_method_name}] Trying next selector for '{element_name}'.")
+                else: # Last selector in the list also failed
+                    logger.error(f"[Scraper.{parent_method_name}] All configured selectors for '{element_name}' (key: {selector_key}) failed.")
+
+        # If all configured selectors failed, trigger interactive fallback
+        if last_exception_from_automate: # Check if any attempt was made
+            user_choice = self._handle_selector_failure_interactive(
+                selector_key,
+                f"cliquer sur '{element_name}'",
+                self.driver.current_url
+            )
+            if user_choice == "STOP_SCRIPT":
+                raise SystemExit(f"[Scraper] Arrêt du script demandé par l'utilisateur pour '{element_name}'.")
+            elif user_choice == "SKIP_ACTION":
+                return False # Action skipped
+            elif user_choice: # New selector provided by user
+                logger.info(f"[Scraper.{parent_method_name}] Retrying click on '{element_name}' with user-provided selector: {user_choice}")
+                try:
+                    super().click(user_choice)
+                    logger.info(f"[Scraper.{parent_method_name}] Successfully clicked '{element_name}' with user-provided selector: '{user_choice}'")
+                    # Potentially log this successful user selector for future update of selectors.json
+                    logger.info(f"SUCCESSFUL USER SELECTOR for '{selector_key}': {user_choice} (Original was: {selector_config_value})")
+                    return True
+                except Exception as e_user:
+                    self._log_error(f"User-provided selector '{user_choice}' also failed for '{element_name}': {e_user}", parent_method_name)
                     return False
-        return False # Should not be reached if logic is correct
+
+        return False
 
 
     def _fill_input(self, selector_key, text, element_name, method_name=""):
-        """Tente de remplir un champ de texte. Gère l'échec de sélecteur de manière interactive."""
+        """
+        Tente de remplir un champ de texte.
+        Gère une liste de sélecteurs depuis config et l'échec interactif.
+        """
         parent_method_name = f"{method_name}._fill_input" if method_name else "_fill_input"
-        original_selector = self.selectors.get(selector_key)
 
-        if not original_selector:
-            self._log_error(f"Selector key '{selector_key}' not defined in config.", parent_method_name)
+        selector_config_value = self.selectors.get(selector_key)
+        if not selector_config_value:
+            self._log_error(f"Selector key '{selector_key}' not defined in config for element '{element_name}'.", parent_method_name)
+            return False
+
+        selectors_to_try = []
+        if isinstance(selector_config_value, list):
+            selectors_to_try.extend(selector_config_value)
+        elif isinstance(selector_config_value, str):
+            selectors_to_try.append(selector_config_value)
+        else:
+            self._log_error(f"Invalid selector format for key '{selector_key}' in config. Expected string or list.", parent_method_name)
             return False
 
         text_to_log = text[:100] + "..." if len(text) > 100 else text
-        logger.info(f"[Scraper.{parent_method_name}] Attempting to fill input '{element_name}' (key: {selector_key}, selector: {original_selector}) with text: '{text_to_log}'")
+        logger.info(f"[Scraper.{parent_method_name}] Attempting to fill input '{element_name}' (key: {selector_key}, trying {len(selectors_to_try)} selector(s): {selectors_to_try}) with text: '{text_to_log}'")
 
-        current_selector = original_selector
-        for attempt in range(2): # Allow one retry with user-provided selector
+        last_exception_from_automate = None
+        for i, selector_str in enumerate(selectors_to_try):
+            logger.debug(f"[Scraper.{parent_method_name}] Trying selector #{i+1} for '{element_name}': '{selector_str}'")
             try:
-                input_element = super().get_elem(current_selector) # get_elem waits and logs
-                if not input_element:
-                    # Error already logged by get_elem, but we might want to trigger interactive handler
-                    raise NoSuchElementException(f"Element for key '{selector_key}' (selector: {current_selector}) not found by get_elem.")
-
-                input_element.clear()
-                logger.debug(f"[Scraper.{parent_method_name}] Cleared input field '{element_name}'.")
-                input_element.send_keys(text)
-                logger.info(f"[Scraper.{parent_method_name}] Successfully sent keys to input '{element_name}' using selector: {current_selector}.")
+                # automate.py's send_data uses get_elem and handles StaleElement for send_keys part
+                super().send_data(selector_str, text)
+                logger.info(f"[Scraper.{parent_method_name}] Successfully filled '{element_name}' using selector: '{selector_str}'")
                 return True
-            except (TimeoutException, NoSuchElementException, ElementNotInteractableException, Exception) as e:
-                self._log_error(f"Initial attempt to fill '{element_name}' (selector: {current_selector}) failed: {e}", parent_method_name)
-                if attempt == 0:
-                    user_choice = self._handle_selector_failure_interactive(
-                        original_selector_key,
-                        f"remplir le champ '{element_name}'",
-                        self.driver.current_url
-                    )
-                    if user_choice == "STOP_SCRIPT":
-                        raise SystemExit("[Scraper] Arrêt du script demandé par l'utilisateur via fallback manuel.")
-                    elif user_choice == "SKIP_ACTION":
-                        return False
-                    elif user_choice:
-                        current_selector = user_choice
-                        logger.info(f"[Scraper.{parent_method_name}] Retrying fill for '{element_name}' with user-provided selector: {current_selector}")
-                        continue
-                    else:
-                        return False
+            except (TimeoutException, NoSuchElementException, ElementNotInteractableException, StaleElementReferenceException, Exception) as e:
+                last_exception_from_automate = e
+                logger.warning(f"[Scraper.{parent_method_name}] Selector '{selector_str}' failed for filling '{element_name}': {e}")
+                if i < len(selectors_to_try) - 1:
+                    logger.info(f"[Scraper.{parent_method_name}] Trying next selector for '{element_name}'.")
                 else:
-                     self._log_error(f"User-provided selector '{current_selector}' also failed for '{element_name}'.", parent_method_name)
-                     return False
+                    logger.error(f"[Scraper.{parent_method_name}] All configured selectors for '{element_name}' (key: {selector_key}) failed.")
+
+        if last_exception_from_automate:
+            user_choice = self._handle_selector_failure_interactive(
+                selector_key,
+                f"remplir le champ '{element_name}'",
+                self.driver.current_url
+            )
+            if user_choice == "STOP_SCRIPT":
+                raise SystemExit(f"[Scraper] Arrêt du script demandé par l'utilisateur pour '{element_name}'.")
+            elif user_choice == "SKIP_ACTION":
+                return False
+            elif user_choice:
+                logger.info(f"[Scraper.{parent_method_name}] Retrying fill for '{element_name}' with user-provided selector: {user_choice}")
+                try:
+                    super().send_data(user_choice, text)
+                    logger.info(f"[Scraper.{parent_method_name}] Successfully filled '{element_name}' with user-provided selector: '{user_choice}'")
+                    logger.info(f"SUCCESSFUL USER SELECTOR for '{selector_key}': {user_choice} (Original was: {selector_config_value})")
+                    return True
+                except Exception as e_user:
+                    self._log_error(f"User-provided selector '{user_choice}' also failed for '{element_name}': {e_user}", parent_method_name)
+                    return False
         return False
 
 
@@ -864,41 +943,66 @@ class Scraper(WebScraping):
         # print(full_message) # Consider removing print if logger is sufficient
 
     def _click_element_js(self, selector_key, element_name, method_name=""):
-        """Tente de cliquer sur un élément via JavaScript. Gère l'échec de manière interactive."""
+        """
+        Tente de cliquer sur un élément via JavaScript.
+        Gère une liste de sélecteurs et l'échec interactif.
+        """
         parent_method_name = f"{method_name}._click_element_js" if method_name else "_click_element_js"
-        original_selector = self.selectors.get(selector_key)
 
-        if not original_selector:
-            self._log_error(f"Selector key '{selector_key}' not defined in config.", parent_method_name)
+        selector_config_value = self.selectors.get(selector_key)
+        if not selector_config_value:
+            self._log_error(f"Selector key '{selector_key}' not defined in config for element '{element_name}'.", parent_method_name)
             return False
 
-        logger.info(f"[Scraper.{parent_method_name}] Attempting to JS click element '{element_name}' (key: {selector_key}, selector: {original_selector})")
+        selectors_to_try = []
+        if isinstance(selector_config_value, list):
+            selectors_to_try.extend(selector_config_value)
+        elif isinstance(selector_config_value, str):
+            selectors_to_try.append(selector_config_value)
+        else:
+            self._log_error(f"Invalid selector format for key '{selector_key}' in config. Expected string or list.", parent_method_name)
+            return False
 
-        current_selector = original_selector
-        for attempt in range(2): # Allow one retry with user-provided selector
+        logger.info(f"[Scraper.{parent_method_name}] Attempting to JS click element '{element_name}' (key: {selector_key}, trying {len(selectors_to_try)} selector(s): {selectors_to_try})")
+
+        last_exception_from_automate = None
+        for i, selector_str in enumerate(selectors_to_try):
+            logger.debug(f"[Scraper.{parent_method_name}] Trying JS click with selector #{i+1} for '{element_name}': '{selector_str}'")
             try:
-                super().click_js(current_selector) # Assumes click_js in WebScraping handles its own StaleElement etc.
+                # automate.py's click_js uses get_elem which handles list of selectors internally if it was modified to do so.
+                # However, our current click_js in automate.py takes a single string.
+                # For consistency with how _click_element and _fill_input now work (passing single selector string from list),
+                # we call super().click_js with selector_str.
+                super().click_js(selector_str)
+                logger.info(f"[Scraper.{parent_method_name}] Successfully JS clicked '{element_name}' using selector: '{selector_str}'")
                 return True
-            except (TimeoutException, NoSuchElementException, ElementNotInteractableException, Exception) as e:
-                self._log_error(f"Initial attempt to JS click '{element_name}' (selector: {current_selector}) failed: {e}", parent_method_name)
-                if attempt == 0:
-                    user_choice = self._handle_selector_failure_interactive(
-                        selector_key,
-                        f"JS cliquer sur '{element_name}'",
-                        self.driver.current_url
-                    )
-                    if user_choice == "STOP_SCRIPT":
-                        raise SystemExit("[Scraper] Arrêt du script demandé par l'utilisateur via fallback manuel.")
-                    elif user_choice == "SKIP_ACTION":
-                        return False
-                    elif user_choice:
-                        current_selector = user_choice
-                        logger.info(f"[Scraper.{parent_method_name}] Retrying JS click on '{element_name}' with user-provided selector: {current_selector}")
-                        continue
-                    else:
-                        return False
+            except (TimeoutException, NoSuchElementException, ElementNotInteractableException, StaleElementReferenceException, Exception) as e:
+                last_exception_from_automate = e
+                logger.warning(f"[Scraper.{parent_method_name}] JS Click with selector '{selector_str}' failed for '{element_name}': {e}")
+                if i < len(selectors_to_try) - 1:
+                    logger.info(f"[Scraper.{parent_method_name}] Trying next selector for JS click on '{element_name}'.")
                 else:
-                    self._log_error(f"User-provided selector '{current_selector}' also failed for JS click on '{element_name}'.", parent_method_name)
+                    logger.error(f"[Scraper.{parent_method_name}] All configured selectors for JS click on '{element_name}' (key: {selector_key}) failed.")
+
+        if last_exception_from_automate:
+            user_choice = self._handle_selector_failure_interactive(
+                selector_key,
+                f"JS cliquer sur '{element_name}'",
+                self.driver.current_url
+            )
+            if user_choice == "STOP_SCRIPT":
+                raise SystemExit(f"[Scraper] Arrêt du script demandé par l'utilisateur pour JS click sur '{element_name}'.")
+            elif user_choice == "SKIP_ACTION":
+                return False
+            elif user_choice:
+                logger.info(f"[Scraper.{parent_method_name}] Retrying JS click on '{element_name}' with user-provided selector: {user_choice}")
+                try:
+                    super().click_js(user_choice)
+                    logger.info(f"[Scraper.{parent_method_name}] Successfully JS clicked '{element_name}' with user-provided selector: '{user_choice}'")
+                    logger.info(f"SUCCESSFUL USER SELECTOR for '{selector_key}' (JS Click): {user_choice} (Original was: {selector_config_value})")
+                    return True
+                except Exception as e_user:
+                    self._log_error(f"User-provided selector '{user_choice}' also failed for JS click on '{element_name}': {e_user}", parent_method_name)
                     return False
         return False
 
