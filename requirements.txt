@@ -4,3 +4,4 @@ pyarmor
 pycryptodome
 emoji
 playwright
+webdriver-manager
