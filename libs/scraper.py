@@ -1,505 +1,464 @@
-import os
+"""
+scraper.py — Facebook Groups automation.
+
+Responsibilities:
+  - save_groups  : Search Facebook by keyword and persist group URLs.
+  - post_in_groups  : Publish one post (text + optional image) per group.
+  - post_in_groupsx : Publish multi-image posts per group.
+
+Design decisions:
+  - All side-effects (navigation, clicks, uploads) are delegated to BrowserEngine.
+  - Every public method catches *all* exceptions so a bad group never kills the run.
+  - Failed groups are logged and screenshots are captured automatically.
+  - Image uploads are sequential (not threaded) because Facebook's dialog
+    only accepts one file-input interaction at a time; threading caused races.
+  - WAIT_MIN delay between groups is fully configurable via .env.
+"""
+
+from __future__ import annotations
+
 import json
-import random
 import logging
+import os
+import random
+import time
 from datetime import datetime
-from time import sleep
-from urllib.parse import urlparse
-from concurrent.futures import ThreadPoolExecutor
 from mimetypes import guess_type
+from pathlib import Path
+from typing import Optional
+
 from dotenv import load_dotenv
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, TimeoutException, ElementNotInteractableException
-from libs.automate import WebScraping
+from selenium.common.exceptions import TimeoutException
 
-# Charger les variables d'environnement
+from libs.browser import BrowserEngine
+
+# ---------------------------------------------------------------------------
+# Environment / configuration
+# ---------------------------------------------------------------------------
+
 load_dotenv()
-CHROME_FOLDER = os.getenv("CHROME_FOLDER")
-WAIT_MIN = int(os.getenv("WAIT_MIN", 1))  # Temps d'attente par défaut
-PROFILE = os.getenv("PROFILE")
-PUBLISH_LABEL = os.getenv("PUBLISH_LABEL", "Post")
-VISIT_LABEL = os.getenv("VISIT_LABEL", "Visit")
 
-# Configuration du logging
+CHROME_FOLDER:   str = os.getenv("CHROME_FOLDER", "")
+PROFILE:         str = os.getenv("PROFILE", "")
+WAIT_MIN:        int = int(os.getenv("WAIT_MIN", "2"))      # minutes between posts
+SCREENSHOT_DIR:  str = os.getenv("SCREENSHOT_DIR", "screenshots")
+LOG_DIR:         str = os.getenv("LOG_DIR", "logs")
+
+# ---------------------------------------------------------------------------
+# Logging  (file + console)
+# ---------------------------------------------------------------------------
+
+Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+Path(SCREENSHOT_DIR).mkdir(parents=True, exist_ok=True)
+
+_log_file = Path(LOG_DIR) / f"scraper_{datetime.now():%Y%m%d}.log"
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    filename="scraper.log"
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    handlers=[
+        logging.FileHandler(_log_file, encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
 
-class Scraper(WebScraping):
-    def __init__(self):
-        """Initialise le scraper en chargeant les données et les sélecteurs."""
-        current_folder = os.path.dirname(__file__)
-        parent_folder = os.path.dirname(current_folder)
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-        # Chemins des fichiers JSON
-        self.data_path = os.path.join(parent_folder, "data.json")
-        self.data_pathx = os.path.join(parent_folder, "data1.json")
-        self.selectors_path = os.path.join(parent_folder, "config", "selectors.json")
-
-        # Charger les données JSON
-        self.json_data = self.load_json(self.data_path)
-        self.json_datax = self.load_json(self.data_pathx)
-
-        # Charger les sélecteurs
-        self.selectors = self.load_json(self.selectors_path)
-
-        # Démarrer le navigateur
-        super().__init__(chrome_folder=CHROME_FOLDER, start_killing=True, user_agent=True)
-
-    def load_json(self, path):
-        """Charge un fichier JSON."""
-        try:
-            with open(path, encoding="UTF-8") as file:
-                return json.load(file)
-        except Exception as e:
-            logger.error(f"Erreur lors du chargement du fichier {path} : {e}")
-            print(f"Erreur lors du chargement du fichier {path} : {e}")
-            return {}
-
-    def get_absolute_path(self, relative_path):
-        """Convertit un chemin relatif en chemin absolu."""
-        current_folder = os.path.dirname(os.path.abspath(__file__))
-        return os.path.normpath(os.path.join(current_folder, relative_path))
-
-    def is_image(self, file_path):
-        """Vérifie si le fichier est une image."""
-        if not os.path.exists(file_path):
-            return False
-        file_type, _ = guess_type(file_path)
-        return file_type and file_type.startswith("image")
-
-    def random_sleep(self, min_seconds=1, max_seconds=5):
-        """Attend un délai aléatoire."""
-        sleep(random.uniform(min_seconds, max_seconds))
-
-    def detect_language(self):
-        """Détecte la langue de l'interface utilisateur."""
-        try:
-            # Détecter la langue à partir de l'attribut 'lang' de l'élément <html>
-            language_element = self.driver.find_element(By.CSS_SELECTOR, "html")
-            lang = language_element.get_attribute("lang")
-            print(f"Langue détectée : {lang}")
-            return lang.split("-")[0]  # Retourne uniquement le code de langue (ex: "fr")
-        except Exception as e:
-            logger.error(f"Erreur lors de la détection de la langue : {e}")
-            print(f"Erreur lors de la détection de la langue : {e}")
-            return "en"  # Langue par défaut
-
-    def get_dynamic_label(self, selector_key):
-        """Récupère un libellé dynamiquement en fonction de la langue détectée."""
-        try:
-            # Extraire le libellé d'un élément spécifique
-            element = self.driver.find_element(By.CSS_SELECTOR, self.selectors[selector_key])
-            label = element.text.strip()
-            print(f"Libellé récupéré pour {selector_key} : {label}")
-            return label
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération du libellé pour {selector_key} : {e}")
-            print(f"Erreur lors de la récupération du libellé pour {selector_key} : {e}")
-            return None
-
-    def upload_image(self, image_path):
-        """Télécharge une image sur Facebook."""
-        if not self.is_image(image_path):
-            logger.error(f"Le fichier {image_path} n'est pas une image valide.")
-            print(f"Le fichier {image_path} n'est pas une image valide.")
-            return False
-
-        try:
-            print(f"Tentative de téléchargement de l'image : {image_path}")
-            self.click_js(self.selectors["show_image_input"])
-            self.random_sleep()
-            file_input = self.driver.find_element(By.CSS_SELECTOR, self.selectors["add_image"])
-            file_input.send_keys(image_path)
-            self.random_sleep()
-            print(f"Image téléchargée avec succès : {image_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Erreur lors du téléchargement de l'image {image_path} : {e}")
-            print(f"Erreur lors du téléchargement de l'image {image_path} : {e}")
-            return False
-
-    def upload_images_parallel(self, image_paths):
-        """Télécharge plusieurs images en parallèle."""
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(self.upload_image, path) for path in image_paths]
-            for future in futures:
-                future.result()  # Attendre que chaque tâche soit terminée
+_ROOT = Path(__file__).resolve().parent.parent
 
 
-    def post_in_groups(self):
-        """Publie un post aléatoire dans chaque groupe avec une seule image."""
-        for group in self.json_data["groups"]:
-            post = random.choice(self.json_data["posts"])
-            post_text = post["text"]
-            post_image = post.get("image", "")
-            post_images = [post_image] if post_image else []
-            print(f"Publication dans le groupe : {group}")
-            print(f"Texte du post : {post_text}")
-            print(f"Image du post : {post_images}")
-            self._post_in_group(group, post_text, post_images)
+# ---------------------------------------------------------------------------
+# Scraper
+# ---------------------------------------------------------------------------
 
-    def save_groups(self, keyword):
-        """Recherche et enregistre les groupes correspondant à un mot-clé."""
-        logger.info("Searching groups...")
-        print(f"Recherche des groupes pour le mot-clé : {keyword}")
-        search_page = f"https://www.facebook.com/groups/search/groups/?q={keyword}"
-        self.set_page(search_page)
-        sleep(3)
+class Scraper:
+    """
+    Facebook Groups automation scraper.
 
-        links_num = 0
-        tries_count = 0
+    Usage::
 
-        # Faire défiler pour charger tous les groupes
-        while True:
-            self.go_bottom()
-            new_links_num = len(self.get_elems(self.selectors["group_link"]))
-            if new_links_num == links_num:
-                tries_count += 1
+        scraper = Scraper()
+        scraper.save_groups("hydraulic press")
+        scraper.post_in_groups()
+    """
+
+    def __init__(self) -> None:
+        # ── Data files ──────────────────────────────────────────────────
+        self._data_path  = _ROOT / "data.json"
+        self._datax_path = _ROOT / "data1.json"
+        self._sel_path   = _ROOT / "config" / "selectors.json"
+
+        self.data:      dict = self._load_json(self._data_path)
+        self.datax:     dict = self._load_json(self._datax_path)
+        self.selectors: dict = self._load_json(self._sel_path)
+
+        self._validate_config()
+
+        # ── Browser ─────────────────────────────────────────────────────
+        self.browser = BrowserEngine(
+            chrome_folder=CHROME_FOLDER,
+            kill_existing=True,
+        )
+
+        # ── Stats ────────────────────────────────────────────────────────
+        self._stats = {"success": 0, "failed": 0, "skipped": 0}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def save_groups(self, keyword: str) -> list[str]:
+        """
+        Search Facebook for groups matching *keyword* and persist them to
+        ``data.json``.  Returns the list of discovered URLs.
+        """
+        logger.info("Searching groups for keyword: '%s'", keyword)
+        url = f"https://www.facebook.com/groups/search/groups/?q={keyword}"
+        self.browser.navigate(url)
+        time.sleep(3)
+
+        # Scroll until no new results appear (3 consecutive unchanged counts).
+        prev_count  = 0
+        stable_hits = 0
+        selector    = self.selectors["group_link"]
+
+        while stable_hits < 3:
+            self.browser.scroll_to_bottom()
+            time.sleep(1.5)
+            new_count = len(self.browser.find_all(selector))
+            if new_count == prev_count:
+                stable_hits += 1
             else:
-                links_num = new_links_num
-                self.refresh_selenium()
+                prev_count  = new_count
+                stable_hits = 0
+                self.browser.refresh_session()
 
-            if tries_count == 3:
-                break
+        links = self.browser.get_attributes(selector, "href", unique=True)
+        logger.info("%d groups found.", len(links))
 
-        # Récupérer tous les liens des groupes
-        links = self.get_attribs(self.selectors["group_link"], "href")
-        logger.info(f"{len(links)} groupes trouvés et enregistrés")
-        print(f"{len(links)} groupes trouvés et enregistrés")
-
-        # Enregistrer les liens dans le fichier JSON
         if links:
-            self.json_data["groups"] = links
-            with open(self.data_path, "w", encoding="UTF-8") as file:
-                json.dump(self.json_data, file, indent=4)
+            self.data["groups"] = links
+            self._save_json(self._data_path, self.data)
 
-    def handle_captcha(self):
-        """Gère les captchas en demandant à l'utilisateur de les résoudre manuellement."""
-        try:
-            WebDriverWait(self.driver, 60).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, self.selectors["captcha"]))
+        return links
+
+    def post_in_groups(self) -> None:
+        """Post one random post (single image) in every saved group."""
+        groups = self.data.get("groups", [])
+        posts  = self.data.get("posts",  [])
+
+        if not groups:
+            logger.error("No groups in data.json — run save_groups first.")
+            return
+        if not posts:
+            logger.error("No posts in data.json.")
+            return
+
+        for group_url in groups:
+            post = random.choice(posts)
+            images = []
+            if post.get("image"):
+                img = self._resolve_path(post["image"])
+                if self._is_valid_image(img):
+                    images = [img]
+
+            self._post_in_group(
+                group_url=group_url,
+                text=post["text"],
+                images=images,
             )
-            print("Veuillez résoudre le captcha manuellement.")
-            WebDriverWait(self.driver, 300).until_not(
-                EC.presence_of_element_located((By.CSS_SELECTOR, self.selectors["captcha"]))
+
+        self._log_summary()
+
+    def post_in_groupsx(self) -> None:
+        """Post multi-image posts (from data1.json) in every saved group."""
+        groups = self.data.get("groups", [])
+        posts  = self.datax.get("posts",  [])
+
+        if not groups:
+            logger.error("No groups in data.json.")
+            return
+        if not posts:
+            logger.error("No posts in data1.json.")
+            return
+
+        for group_url in groups:
+            post   = random.choice(posts)
+            images = [
+                self._resolve_path(img)
+                for img in post.get("images", [])
+                if self._is_valid_image(self._resolve_path(img))
+            ]
+            self._post_in_group(
+                group_url=group_url,
+                text=post["text"],
+                images=images,
             )
-            print("Captcha résolu.")
-        except TimeoutException:
-            logger.error("Captcha non résolu à temps.")
-            print("Captcha non résolu à temps.")
-            raise
 
-    def bypass_cloudflare(self, url):
-        """Bypass Cloudflare protection."""
-        self.set_page(url)
-        sleep(10)  # Wait for Cloudflare challenge to complete
-        self.driver.execute_script("window.stop();")
+        self._log_summary()
 
-    def clear_browser_cache(self):
-        """Clear browser cache."""
-        self.driver.execute_script("window.localStorage.clear();")
-        self.driver.execute_script("window.sessionStorage.clear();")
-        self.driver.execute_cdp_cmd('Network.clearBrowserCache', {})
+    # ------------------------------------------------------------------
+    # Core posting logic
+    # ------------------------------------------------------------------
 
-    def capture_network_traffic(self):
-        """Capture network traffic."""
-        logs = self.driver.get_log("performance")
-        return logs
+    def _post_in_group(
+        self,
+        group_url: str,
+        text: str,
+        images: list[str],
+    ) -> None:
+        """
+        Attempt to publish *text* (and optional *images*) in *group_url*.
 
-    def get_alert_text(self):
-        """Get the text from an alert box."""
+        The method is structured as a pipeline of steps.  Each step that
+        fails logs the error and returns early; the next group is tried on
+        the next loop iteration.
+        """
+        logger.info("▶  Posting in: %s", group_url)
+
         try:
-            WebDriverWait(self.driver, 10).until(EC.alert_is_present())
-            alert = self.driver.switch_to.alert
-            alert_text = alert.text
-            alert.accept()
-            print(f"Texte de l'alerte : {alert_text}")
-            return alert_text
-        except TimeoutException:
-            return None
+            # 1. Navigate
+            self.browser.navigate(group_url)
+            self._random_sleep(4, 6)
+            self.browser.refresh_session()
 
-    def dismiss_alert(self):
-        """Dismiss an alert box."""
-        try:
-            WebDriverWait(self.driver, 10).until(EC.alert_is_present())
-            alert = self.driver.switch_to.alert
-            alert.dismiss()
-            print("Alerte rejetée.")
-        except TimeoutException:
-            pass
+            # 2. Open the post composer
+            if not self._safe_click("display_input", "composer trigger"):
+                self._handle_failed_group(group_url, "composer trigger not found")
+                return
 
-    def accept_alert(self):
-        """Accept an alert box."""
-        try:
-            WebDriverWait(self.driver, 10).until(EC.alert_is_present())
-            alert = self.driver.switch_to.alert
-            alert.accept()
-            print("Alerte acceptée.")
-        except TimeoutException:
-            pass
+            self._random_sleep(1, 2)
 
-    def restart_browser(self, time_out=0):
-        """Restart the browser."""
-        self.close_browser()
-        self.__set_browser_instance__()
-        if time_out > 0:
-            self.driver.set_page_load_timeout(time_out)
+            # 3. Type the post text
+            if not self._safe_type("input", text, "post text area"):
+                self._handle_failed_group(group_url, "text area not found")
+                return
 
-    def refresh_page(self):
-        """Refresh the current page."""
-        self.driver.refresh()
-        print("Page rafraîchie.")
+            # 4. Upload images (optional – failure falls back to theme)
+            if images:
+                uploaded = self._upload_images(images)
+                if not uploaded:
+                    logger.warning("Image upload failed – applying random theme instead.")
+                    self._apply_random_theme()
 
-    def close_browser(self):
-        """Close the browser."""
-        self.driver.quit()
-        print("Navigateur fermé.")
+            # 5. Submit
+            if not self._safe_click("submit", "submit button"):
+                self._handle_failed_group(group_url, "submit button not found")
+                return
 
-    def execute_script(self, script, *args):
-        """Execute a JavaScript script."""
-        result = self.driver.execute_script(script, *args)
-        print(f"Script exécuté avec succès : {script}")
-        return result
+            # 6. Post-publish actions
+            logger.info("✔  Posted successfully in %s", group_url)
+            self._stats["success"] += 1
 
-    def wait_for_element(self, selector, time_out=10):
-        """Wait for an element to be present."""
-        try:
-            WebDriverWait(self.driver, time_out).until(EC.presence_of_element_located((By.CSS_SELECTOR, selector)))
-            print(f"Élément trouvé avec le sélecteur : {selector}")
-        except TimeoutException:
-            print(f"Element with selector {selector} not found within {time_out} seconds")
-            raise Exception(f"Element with selector {selector} not found within {time_out} seconds")
+            self._random_sleep(12, 18)
+            self._add_comment()
+            self._wait_between_groups()
 
-    def wait_for_element_to_be_clickable(self, selector, time_out=10):
-        """Wait for an element to be clickable."""
-        try:
-            WebDriverWait(self.driver, time_out).until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
-            print(f"Élément cliquable trouvé avec le sélecteur : {selector}")
-        except TimeoutException:
-            print(f"Element with selector {selector} not clickable within {time_out} seconds")
-            raise Exception(f"Element with selector {selector} not clickable within {time_out} seconds")
+        except Exception as exc:
+            self._handle_failed_group(group_url, str(exc))
 
-    def wait_for_element_to_disappear(self, selector, time_out=10):
-        """Wait for an element to disappear."""
-        try:
-            WebDriverWait(self.driver, time_out).until(EC.invisibility_of_element_located((By.CSS_SELECTOR, selector)))
-            print(f"Élément disparu avec le sélecteur : {selector}")
-        except TimeoutException:
-            print(f"Element with selector {selector} did not disappear within {time_out} seconds")
-            raise Exception(f"Element with selector {selector} did not disappear within {time_out} seconds")
-    
-    def wait_for_text_to_be_present(self, selector, text, time_out=10):
-        """Wait for specific text to be present in an element."""
-        try:
-            WebDriverWait(self.driver, time_out).until(EC.text_to_be_present_in_element((By.CSS_SELECTOR, selector), text))
-            print(f"Texte '{text}' trouvé dans l'élément avec le sélecteur : {selector}")
-        except TimeoutException:
-            print(f"Text '{text}' not present in element with selector {selector} within {time_out} seconds")
-            raise Exception(f"Text '{text}' not present in element with selector {selector} within {time_out} seconds")
-    
-    def wait_for_title(self, title, time_out=10):
-        """Wait for the page title to be a specific value."""
-        try:
-            WebDriverWait(self.driver, time_out).until(EC.title_is(title))
-            print(f"Titre de la page trouvé : {title}")
-        except TimeoutException:
-            print(f"Title '{title}' not present within {time_out} seconds")
-            raise Exception(f"Title '{title}' not present within {time_out} seconds")
+    # ------------------------------------------------------------------
+    # Image upload
+    # ------------------------------------------------------------------
 
+    def _upload_images(self, paths: list[str]) -> bool:
+        """
+        Upload one or more images sequentially.
+        Returns True if at least one image was uploaded successfully.
+        """
+        any_success = False
+        for path in paths:
+            try:
+                self._safe_click("show_image_input", "photo/video button")
+                self._random_sleep(1, 2)
+                self.browser.send_file(self.selectors["add_image"], path)
+                self._random_sleep(1, 2)
+                any_success = True
+                logger.debug("Uploaded: %s", path)
+            except Exception as exc:
+                logger.warning("Failed to upload %s: %s", path, exc)
+        return any_success
 
+    # ------------------------------------------------------------------
+    # Comment
+    # ------------------------------------------------------------------
 
-
-    def wait_for_title_contains(self, title, time_out=10):
-        """Wait for the page title to contain a specific value."""
-        try:
-            WebDriverWait(self.driver, time_out).until(EC.title_contains(title))
-            print(f"Titre de la page contenant '{title}' trouvé")
-        except TimeoutException:
-            print(f"Title containing '{title}' not present within {time_out} seconds")
-            raise Exception(f"Title containing '{title}' not present within {time_out} seconds")
-
-    def add_comments(self):
-        """Ajouter des commentaires au post publié."""
+    def _add_comment(self) -> None:
+        """
+        Try to post a random comment.  Never raises — comment failure is
+        non-critical.
+        """
         comments = [
-            "Super post !",
+            "Super !",
             "Merci pour le partage !",
             "Très intéressant !",
             "Top !",
-            "J'aime beaucoup ce contenu."
+            "J'aime beaucoup ce contenu.",
         ]
-
-        # Sélecteurs possibles pour le champ de commentaire
-        possible_selectors = [
-            "div.xdj266r.x11i5rnm.xat24cr.x1mh8g0r",
-            "div.xi81zsa.xo1l8bm.xlyipyv.xuxw1ft.x49crj4.x1ed109x.xdl72j9.x1iyjqo2.xs83m0k.x6prxxf.x6ikm8r.x10wlt62.x1y1aw1k.xn6708d.xwib8y2.x1ye3gou"
-        ]
-
         try:
-            for selector in possible_selectors:
-                try:
-                    comment_inputs = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    if comment_inputs:
-                        comment_input = comment_inputs[0]
-                        comment_button = self.driver.find_element(By.CSS_SELECTOR, "div[aria-label='Comment']")
-                        comment_button.click()
-                        for comment in random.sample(comments, k=random.randint(1, 2)):
-                            try:
-                                comment_input.click()
-                                comment_input.send_keys(comment)
-                                self.random_sleep()
-                                self.click_js(self.selectors["submit_comment"])
-                                self.random_sleep()
-                                logger.info(f'Commentaire ajouté : "{comment}"')
-                                print(f'Commentaire ajouté : "{comment}"')
-                                break
-                            except Exception as e:
-                                logger.error(f'Erreur en ajoutant le commentaire : "{comment}" : {e}')
-                                print(f'Erreur en ajoutant le commentaire : "{comment}" : {e}')
-                        break
-                except Exception as e:
-                    continue
-            else:
-                logger.warning("Champ de commentaire non trouvé.")
-                print("Champ de commentaire non trouvé.")
-        except Exception as e:    
+            comment_sel = self.selectors.get("comment_input")
+            submit_sel  = self.selectors.get("submit_comment")
+            if not comment_sel or not submit_sel:
+                return
+
+            elem = self.browser.find_one(comment_sel, timeout=8)
+            if not elem:
+                return
+
+            elem.click()
+            elem.send_keys(random.choice(comments))
+            self._random_sleep(1, 2)
+            self._safe_click_js("submit_comment", "submit comment")
+        except Exception as exc:
+            logger.debug("Comment step skipped: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Theme fallback
+    # ------------------------------------------------------------------
+
+    def _apply_random_theme(self) -> None:
+        try:
+            self._safe_click_js("display_themes", "themes panel")
+            self._random_sleep(0.5, 1)
+            theme_sel = self.selectors["theme"].replace(
+                "index", str(random.randint(1, 5))
+            )
+            self.browser.click_js(theme_sel)
+        except Exception as exc:
+            logger.debug("Theme application skipped: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Safe interaction wrappers (return bool instead of raising)
+    # ------------------------------------------------------------------
+
+    def _safe_click(self, key: str, description: str) -> bool:
+        try:
+            self.browser.click(self.selectors[key])
+            return True
+        except Exception as exc:
+            logger.warning("Cannot click '%s': %s", description, exc)
+            return False
+
+    def _safe_click_js(self, key: str, description: str) -> bool:
+        try:
+            self.browser.click_js(self.selectors[key])
+            return True
+        except Exception as exc:
+            logger.warning("Cannot JS-click '%s': %s", description, exc)
+            return False
+
+    def _safe_type(self, key: str, text: str, description: str) -> bool:
+        try:
+            self.browser.type_text(self.selectors[key], text, clear_first=False)
+            return True
+        except Exception as exc:
+            logger.warning("Cannot type into '%s': %s", description, exc)
+            return False
+
+    # ------------------------------------------------------------------
+    # Error / diagnostic helpers
+    # ------------------------------------------------------------------
+
+    def _handle_failed_group(self, group_url: str, reason: str) -> None:
+        self._stats["failed"] += 1
+        logger.error("✘  Failed (%s): %s", reason, group_url)
+        # Capture screenshot for post-mortem debugging
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = Path(SCREENSHOT_DIR) / f"error_{ts}.png"
+        try:
+            self.browser.screenshot(str(name))
+        except Exception:
             pass
 
-    def post_in_marketplace(self):
-        """Publie un post dans la section Marketplace de Facebook."""
+    def _log_summary(self) -> None:
+        s = self._stats
+        logger.info(
+            "Run complete — ✔ %d success | ✘ %d failed | ⏭  %d skipped",
+            s["success"], s["failed"], s["skipped"],
+        )
+
+    # ------------------------------------------------------------------
+    # Timing helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _random_sleep(min_s: float = 1.0, max_s: float = 3.0) -> None:
+        time.sleep(random.uniform(min_s, max_s))
+
+    def _wait_between_groups(self) -> None:
+        wait_s = random.uniform(WAIT_MIN * 60, WAIT_MIN * 70)
+        logger.info("Waiting %.0f seconds before next group …", wait_s)
+        time.sleep(wait_s)
+
+    # ------------------------------------------------------------------
+    # Path / file helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_path(raw: str) -> str:
+        """
+        Accept both absolute Windows paths (from data.json) and relative
+        paths (relative to the project root).
+        """
+        p = Path(raw)
+        if p.is_absolute():
+            return str(p)
+        resolved = _ROOT / raw
+        return str(resolved)
+
+    @staticmethod
+    def _is_valid_image(path: str) -> bool:
+        if not Path(path).exists():
+            logger.warning("Image not found: %s", path)
+            return False
+        mime, _ = guess_type(path)
+        return bool(mime and mime.startswith("image"))
+
+    # ------------------------------------------------------------------
+    # JSON helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_json(path: Path) -> dict:
         try:
-            self.set_page("https://www.facebook.com/marketplace/create/item")
-            self.random_sleep(3, 5)
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            logger.warning("File not found: %s — using empty dict.", path)
+            return {}
+        except json.JSONDecodeError as exc:
+            logger.error("Invalid JSON in %s: %s", path, exc)
+            return {}
 
-            # Titre de l'annonce
-            title = random.choice(self.json_datax["titles"])
-            self.send_data(self.selectors["marketplace_title"], title)
+    @staticmethod
+    def _save_json(path: Path, data: dict) -> None:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=4)
+        logger.info("Saved: %s", path)
 
-            # Prix de l'annonce
-            price = "1"
-            self.send_data(self.selectors["marketplace_price"], price)
+    # ------------------------------------------------------------------
+    # Startup validation
+    # ------------------------------------------------------------------
 
-            # Catégorie de l'annonce
-            category = random.choice(self.json_datax["categories"])
-            self.select_drop_down_text(self.selectors["marketplace_category"], category)
-
-            # Description de l'annonce
-            description = random.choice(self.json_datax["descriptions"])
-            self.send_data(self.selectors["marketplace_description"], description)
-
-            # Télécharger les images
-            post_images = random.sample(self.json_datax["images"], min(10, len(self.json_datax["images"])))
-            self.upload_images_parallel([self.get_absolute_path(img) for img in post_images])
-
-            # Soumettre l'annonce
-            self.click_js(self.selectors["marketplace_submit"])
-            logger.info(f'Annonce publiée : "{title}" - "{price}" - "{description}"')
-            print(f'Annonce publiée : "{title}" - "{price}" - "{description}"')
-
-        except Exception as e:
-            logger.error(f'Erreur lors de la publication dans le Marketplace : {e}')
-            print(f'Erreur lors de la publication dans le Marketplace : {e}')
-
-
-
-
-
-    def _post_in_group(self, group, post_text, post_images):
-        """Méthode interne pour publier un post dans un groupe."""
-        self.set_page(group)
-        self.random_sleep(5, 7)
-
-        # Rafraîchir la page
-        try:
-            self.refresh_selenium()
-        except Exception as e:
-            self._log_error(f'Erreur lors du rafraîchissement de la page : {e}')
-            return
-
-        # Ouvrir la zone de texte
-        if not self._click_element(self.selectors["display_input"], "display_input"):
-            return
-
-        self.random_sleep()
-
-        # Remplir le champ de texte
-        if not self._fill_input(self.selectors["input"], post_text, "input"):
-            return
-
-        # Télécharger les images si elles sont fournies
-        if post_images:
-            try:
-                self.upload_images_parallel([self.get_absolute_path(img) for img in post_images])
-            except Exception as e:
-                self._log_error(f"Erreur lors du téléchargement des images, publication du texte avec un thème : {e}")
-                self._apply_theme()
-
-        # Soumettre le post
-        if not self._click_element(self.selectors["submit"], "submit"):
-            return
-
-        self._log_success(f'Post réussi : "{post_text}" ({group})')
-        self.random_sleep(15, 20)
-        self.add_comments()
-        self.random_sleep(WAIT_MIN * 60, WAIT_MIN * 70)
-
-    def _click_element(self, selector, element_name):
-        """Tente de cliquer sur un élément et retourne True si réussi, False sinon."""
-        try:
-            WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-            ).click()
-            return True
-        except TimeoutException:
-            self._log_error(f"L'élément '{element_name}' n'est pas devenu interactif après 10 secondes.")
-        except Exception as e:
-            self._log_error(f'Erreur en cliquant sur l\'élément "{element_name}" : {e}')
-        return False
-
-    def _fill_input(self, selector, text, element_name):
-        """Tente de remplir un champ de texte et retourne True si réussi, False sinon."""
-        try:
-            input_element = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+    def _validate_config(self) -> None:
+        """Warn early about missing or obviously wrong configuration."""
+        if not self.data.get("groups"):
+            logger.warning(
+                "data.json has no 'groups' — run option 1 (Save groups) first."
             )
-            input_element.clear()
-            input_element.send_keys(text)
-            return True
-        except TimeoutException:
-            self._log_error(f"L'élément '{element_name}' n'est pas devenu interactif après 10 secondes.")
-        except NoSuchElementException:
-            self._log_error(f"Sélecteur '{element_name}' introuvable.")
-        except ElementNotInteractableException:
-            self._log_error(f"L'élément '{element_name}' n'est pas interactif.")
-        except Exception as e:
-            self._log_error(f'Erreur en écrivant le texte dans l\'élément "{element_name}" : {e}')
-        return False
+        if not self.data.get("posts"):
+            logger.warning("data.json has no 'posts' — add posts before running.")
+        if not self.selectors:
+            raise RuntimeError("config/selectors.json is empty or missing.")
 
-    def _apply_theme(self):
-        """Applique un thème aléatoire au post."""
-        try:
-            self.click_js(self.selectors["display_themes"])
-            self.random_sleep()
-            self.click_js(self.selectors["theme"].replace("index", str(random.randint(1, 5))))
-        except Exception as e:
-            self._log_error(f'Erreur en appliquant le thème : {e}')
+    # ------------------------------------------------------------------
+    # Context manager support
+    # ------------------------------------------------------------------
 
-    def _log_error(self, message):
-        """Log et affiche un message d'erreur."""
-        logger.error(message)
-        print(message)
+    def __enter__(self) -> "Scraper":
+        return self
 
-    def _log_success(self, message):
-        """Log et affiche un message de succès."""
-        logger.info(message)
-        print(message)
-# Exemple d'utilisation
-if __name__ == "__main__":
-    scraper = Scraper()
-    scraper.post_in_groupsx()
-    scraper.post_in_marketplace()
+    def __exit__(self, *_) -> None:
+        self.browser.quit()

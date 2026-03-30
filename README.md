@@ -1,155 +1,57 @@
-pyarmor gen -i .\libs\  --output=../bonDist
-pyarmor gen -i check_license.py --output=../bonDist
-pyarmor gen -i __post_in_groups__.py  --output=../bonDist
-pyarmor gen -i __post_in_groupsx__.py  --output=../bonDist
-pyarmor gen -i __save_groups__.py  --output=../bonDist
+# Facebook Groups Post Bot — v2.0
 
-git branch --set-upstream-to=origin/main new_branch
+Automation tool for posting content to Facebook Groups using Selenium.
 
+## Architecture
 
-
-
-
-<div><a href='https://github.com/darideveloper/facebook-groups-post-bot/blob/master/LICENSE' target='_blank'>
-                <img src='https://img.shields.io/github/license/darideveloper/facebook-groups-post-bot.svg?style=for-the-badge' alt='MIT License' height='30px'/>
-            </a><a href='https://www.linkedin.com/in/francisco-dari-hernandez-6456b6181/' target='_blank'>
-                <img src='https://img.shields.io/static/v1?style=for-the-badge&message=LinkedIn&color=0A66C2&logo=LinkedIn&logoColor=FFFFFF&label=' alt='Linkedin' height='30px'/>
-            </a><a href='https://t.me/darideveloper' target='_blank'>
-                <img src='https://img.shields.io/static/v1?style=for-the-badge&message=Telegram&color=26A5E4&logo=Telegram&logoColor=FFFFFF&label=' alt='Telegram' height='30px'/>
-            </a><a href='https://github.com/darideveloper' target='_blank'>
-                <img src='https://img.shields.io/static/v1?style=for-the-badge&message=GitHub&color=181717&logo=GitHub&logoColor=FFFFFF&label=' alt='Github' height='30px'/>
-            </a><a href='https://www.fiverr.com/darideveloper' target='_blank'>
-                <img src='https://img.shields.io/static/v1?style=for-the-badge&message=Fiverr&color=222222&logo=Fiverr&logoColor=1DBF73&label=' alt='Fiverr' height='30px'/>
-            </a><a href='https://discord.com/users/992019836811083826' target='_blank'>
-                <img src='https://img.shields.io/static/v1?style=for-the-badge&message=Discord&color=5865F2&logo=Discord&logoColor=FFFFFF&label=' alt='Discord' height='30px'/>
-            </a><a href='mailto:darideveloper@gmail.com?subject=Hello Dari Developer' target='_blank'>
-                <img src='https://img.shields.io/static/v1?style=for-the-badge&message=Gmail&color=EA4335&logo=Gmail&logoColor=FFFFFF&label=' alt='Gmail' height='30px'/>
-            </a><a href='https://www.twitch.tv/darideveloper' target='_blank'>
-                <img src='https://img.shields.io/static/v1?style=for-the-badge&message=Twitch&color=b9a3e3&logo=Twitch&logoColor=ffffff&label=' alt='Twitch' height='30px'/>
-            </a></div><div align='center'><br><br><img src='https://github.com/darideveloper/facebook-groups-post-bot/raw/master/imgs/logo.gif' alt='Facebook Groups Post Bot' height='80px'/>
-
-# Facebook Groups Post Bot
-
-Python bot for create text posts in facebook groups where you already are a member.
-Project type: **personal**
-
-</div><br><details>
-            <summary>Table of Contents</summary>
-            <ol>
-<li><a href='#buildwith'>Build With</a></li>
-<li><a href='#media'>Media</a></li>
-<li><a href='#details'>Details</a></li>
-<li><a href='#install'>Install</a></li>
-<li><a href='#settings'>Settings</a></li>
-<li><a href='#run'>Run</a></li>
-<li><a href='#roadmap'>Roadmap</a></li></ol>
-        </details><br>
-
-# Build with
-
-<div align='center'><a href='https://www.python.org/' target='_blank'> <img src='https://cdn.svgporn.com/logos/python.svg' alt='Python' title='Python' height='50px'/> </a><a href='https://www.selenium.dev/' target='_blank'> <img src='https://cdn.svgporn.com/logos/selenium.svg' alt='Selenium' title='Selenium' height='50px'/> </a></div>
-
-# Details
-
-This project have two scripts **save_groups**.py **post_groups**.py
-
-The **save_groups**.py script is used to save the groups where you are a member in the data.json, searching them with specific keyword. This script is useful if you want to post in a lot of groups, because you can save the groups in the json file and use it in the **post_groups**.py script.
-
-
-The **post_groups**.py script is used to post in spcific groups. In the data.json file you can save the groups where you want to post, and the script will post in all of them (a random post each time)
-
-Warning: This script is not for spamming groups, is for post in groups where you are a member, and you want to post in a lot of groups at the same time. I am not responsible for the use that you give to this script.
-
-# Install
-
-## Prerequisites
-
-* [Google chrome](https://www.google.com/intl/es-419/chrome/)
-* [Python >=3.10](https://www.python.org/)
-* [Git](https://git-scm.com/)
-
-## Installation
-
-1. Clone the repo
-
-   ```sh
-   git clone https://github.com/darideveloper/facebook-groups-post-bot.git
-   ```
-
-2. Install python packages (opening a terminal in the project folder)
-
-   ```sh
-   python -m pip install -r requirements.txt 
-   ```
-
-3. Create a `.env` file and `data.json` file in the project folder.
-
-# Settings
-
-Update your chrome path in the `.env` file (note: the chrome path is the folder where chrome data its installed)
-
-```js
-CHROME_PATH = C:Users<<your-user-name>>AppDataLocalGoogleChromeUser Data
+```
+bon-v2/
+├── __main__.py          # CLI entry point  →  python -m bon
+├── .env.example         # Configuration template
+├── data.json            # Groups + posts (single image)
+├── data1.json           # Posts (multi-image)
+├── requirements.txt
+├── config/
+│   └── selectors.json   # Multi-language CSS selectors
+├── libs/
+│   ├── browser.py       # BrowserEngine — pure Selenium primitives
+│   └── scraper.py       # Scraper       — Facebook business logic
+├── logs/                # Auto-created — daily log files
+└── screenshots/         # Auto-created — error screenshots
 ```
 
-# Run
+### Layer responsibilities
 
-1. Before run the scripts, you need to login in your facebook account in chrome
+| File | What it does |
+|------|--------------|
+| `browser.py` | Manages Chrome lifecycle, provides `click / type_text / find_one / …` |
+| `scraper.py` | Facebook-specific logic: open composer, upload images, submit, wait |
+| `__main__.py` | Interactive CLI menu |
 
-2. (optional) Open the **save_groups**.py script with a code/text editor, and replace the "keyword" for search groups in the line 3
+## Setup
 
-    ```python
-    keyword = "python" # sample for search group where you are a member, about python
-    ```
+```bash
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env — set CHROME_FOLDER to your Chrome profile path
+```
 
-3. (optional) Run the **save_groups**.py script
+## Run
 
-    ```sh
-    python __save_groups__.py
-    ```
+```bash
+python -m bon
+```
 
-4. Open the "data.json" file, and add the groups where you want to post, and the text of the post in the "text" field
+## Key robustness improvements (v2 vs v1)
 
-    ```json
-        {
-        "posts": [
-            {
-                "text": "text post 1",
-                "image": "{image path}"
-            },
-            {
-                "text": "text post 2",
-                "image": "{image path}"
-            },
-            {
-                "text": "text post 3",
-                "image": ""
-            },
-        ],
-        "groups": [
-            "https://www.facebook.com/groups/sample-group-1/",
-            "https://www.facebook.com/groups/sample-group-2/",
-            "https://www.facebook.com/groups/sample-group-3/",
-            "https://www.facebook.com/groups/sample-group-4/",
-            "https://www.facebook.com/groups/sample-group-5/",
-            "https://www.facebook.com/groups/sample-group-6/",
-            "https://www.facebook.com/groups/sample-group-7/",
-            "https://www.facebook.com/groups/sample-group-8/"
-        ]
-    }
-    ```
-
-5. Run the **post_groups**.py script
-
-    ```sh
-    python __post_groups__.py
-    ```
-
-6. Wait until the script finish, and enjoy your posts in the groups :
-
-# Roadmap
-
-- [x] Get all groups where you are a member related to a keyword
-- [X] Single post per group
-- [X] Choose a random post each time
-- [X] Optional image in posts
+| Area | v1 | v2 |
+|------|----|----|
+| Browser engine | Duplicated in `automate.py` + `automate3.py` | Single `browser.py` |
+| Error handling | Mixed raise/silent | Every step returns bool; failed groups never crash the run |
+| Retries | None | `_with_retries()` with exponential back-off for Stale/Timeout |
+| Image upload | Parallel threads (race conditions) | Sequential — safe with Facebook's dialog |
+| Screenshots on error | Manual | Automatic on every failure |
+| Logging | Single file, mixed print/logger | Rotating daily log + console; structured format |
+| Path resolution | Hardcoded Windows paths | `_resolve_path()` handles absolute + relative |
+| Config validation | None | Warns at startup for missing groups/posts |
+| Context manager | None | `with Scraper() as s:` — browser always cleaned up |
