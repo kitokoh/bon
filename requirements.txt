@@ -1,7 +1,19 @@
-playwright==1.42.0
+# BON — Facebook Groups Publisher
+# Dépendances principales (v4.1 - Moderne & Optimisé)
+
+# Moteur navigateur moderne (remplace Selenium)
+playwright==1.49.0
+
+# Utilitaires
 python-dotenv==1.0.1
-requests==2.31.0
-pyarmor==8.4.0
-pycryptodome==3.20.0
-emoji==2.10.1
-# Selenium SUPPRIMÉ — remplacé par Playwright
+requests==2.32.3
+emoji==2.14.0
+
+# Optionnel : obfuscation et cryptographie
+# pyarmor==8.4.0
+# pycryptodome==3.20.0
+
+# Notes:
+# - Selenium a été supprimé (obsolète, lent, détectable)
+# - Playwright est plus rapide, moderne et moins détectable
+# - Pour installer : pip install -r requirements.txt && playwright install chromium
