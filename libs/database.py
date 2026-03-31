@@ -81,7 +81,10 @@ class BONDatabase:
                     -- Configuration
                     max_groups_per_day INTEGER DEFAULT 20,
                     cooldown_until TEXT,
-                    warmup_completed BOOLEAN DEFAULT FALSE
+                    warmup_completed BOOLEAN DEFAULT FALSE,
+                    
+                    -- Session storage (JSON)
+                    storage_state TEXT
                 )
             """)
             
@@ -351,6 +354,73 @@ class BONDatabase:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM accounts ORDER BY updated_at DESC")
             return [dict(row) for row in cursor.fetchall()]
+    
+    def ensure_account_exists(self, name: str, email: str = None, profile_url: str = None) -> int:
+        """Crée un compte s'il n'existe pas déjà, retourne l'ID."""
+        existing = self.get_account(name)
+        if existing:
+            return existing['id']
+        return self.create_account(name, email, profile_url)
+    
+    def get_account_status(self, name: str) -> Optional[str]:
+        """Récupère le statut d'un compte par son nom."""
+        account = self.get_account(name)
+        return account['status'] if account else None
+    
+    def update_account_status(self, name: str, status: str, reason: str = None):
+        """Met à jour le statut d'un compte par son nom."""
+        account_id = self.ensure_account_exists(name)
+        self.set_account_status(account_id, status, reason)
+    
+    def save_account_storage_state(self, name: str, storage_state: dict):
+        """Sauvegarde l'état de session d'un compte (JSON)."""
+        import json
+        account_id = self.ensure_account_exists(name)
+        storage_json = json.dumps(storage_state)
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE accounts 
+                SET storage_state = ?, updated_at = ?
+                WHERE id = ?
+            """, (storage_json, datetime.now().isoformat(), account_id))
+    
+    def get_account_block_info(self, name: str) -> Optional[Dict]:
+        """Récupère les informations de blocage d'un compte."""
+        account = self.get_account(name)
+        if not account or account['status'] != 'temporarily_blocked':
+            return None
+        
+        from datetime import datetime
+        now = datetime.now()
+        cooldown_until = account.get('cooldown_until')
+        
+        can_resume = False
+        if cooldown_until:
+            try:
+                until_dt = datetime.fromisoformat(cooldown_until)
+                can_resume = now >= until_dt
+            except:
+                can_resume = True
+        
+        return {
+            'status': account['status'],
+            'reason': account.get('status_reason'),
+            'until': cooldown_until,
+            'can_resume': can_resume
+        }
+    
+    def record_account_block(self, name: str, block_type: str, reason: str):
+        """Enregistre un blocage de compte en DB."""
+        account_id = self.ensure_account_exists(name)
+        self.set_account_status(account_id, "temporarily_blocked", reason)
+        # Enregistrer dans la table account_blocks
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO account_blocks (account_id, block_type, reason, blocked_at)
+                VALUES (?, ?, ?, ?)
+            """, (account_id, block_type, reason, datetime.now().isoformat()))
     
     # ==================== GROUPS ====================
     
