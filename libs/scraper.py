@@ -1,6 +1,7 @@
 """
 scraper.py — Logique métier Facebook (publication groupes, marketplace, commentaires)
 Composition avec PlaywrightEngine — aucun héritage, cross-platform, sans Selenium.
+Intégré avec BONDatabase et SelectorHealthManager pour suivi professionnel.
 """
 import random
 import time
@@ -20,6 +21,8 @@ from libs.error_handlers import (
 )
 from libs.log_emitter import emit
 from libs.config_manager import resolve_media_path
+from libs.database import get_database, BONDatabase
+from automation.selector_health import get_health_manager, SelectorHealthManager
 
 # Commentaires aléatoires par défaut (personnalisables via config)
 DEFAULT_COMMENTS = [
@@ -48,12 +51,17 @@ class Scraper:
         session_config: dict,
         session_name: str,
     ):
-        self.engine       = engine
-        self.selectors    = selectors
-        self.config       = session_config
-        self.session_name = session_name
-        self._context     = None
-        self._page        = None
+        self.engine          = engine
+        self.selectors       = selectors
+        self.config          = session_config
+        self.session_name    = session_name
+        self._context        = None
+        self._page           = None
+        # Intégration base de données et health manager
+        self.db              = get_database()
+        self.health_manager  = get_health_manager()
+        # Enregistrer le compte en DB s'il n'existe pas
+        self.db.ensure_account_exists(self.session_name)
 
     # ──────────────────────────────────────────
     # Cycle de vie du contexte
@@ -61,16 +69,36 @@ class Scraper:
 
     def open(self) -> None:
         """Ouvre le contexte navigateur avec la session du compte."""
+        # Vérifier le statut du compte avant d'ouvrir
+        account_status = self.db.get_account_status(self.session_name)
+        if account_status == "temporarily_blocked":
+            block_info = self.db.get_account_block_info(self.session_name)
+            if block_info and not block_info.get("can_resume", False):
+                raise FacebookBlockedError(
+                    f"Compte {self.session_name} temporairement bloqué jusqu'à {block_info.get('until')}"
+                )
+        elif account_status == "session_expired":
+            emit("WARN", "SESSION_EXPIRED_DETECTED", compte=self.session_name)
+        
         storage_state = self.config.get("storage_state", "")
         self._context, self._page = self.engine.new_context(
             storage_state=storage_state
         )
+        # Mettre à jour le statut en DB
+        self.db.update_account_status(self.session_name, "healthy")
         emit("INFO", "SESSION_START", compte=self.session_name)
 
     def close(self) -> None:
         """Ferme le contexte navigateur proprement."""
         try:
             if self._context:
+                # Sauvegarder l'état de session dans la DB
+                try:
+                    storage_state = self._context.storage_state()
+                    self.db.save_account_storage_state(self.session_name, storage_state)
+                except Exception as e:
+                    emit("WARN", "STORAGE_STATE_SAVE_ERROR", error=str(e))
+                
                 self._context.close()
                 self._context = None
                 self._page    = None
@@ -152,22 +180,55 @@ class Scraper:
                  url=group_url, images=len(images))
 
             try:
+                # Vérifier si le compte peut poster (cooldown DB)
+                can_post, reason = self.db.can_account_post(self.session_name)
+                if not can_post:
+                    emit("WARN", "ACCOUNT_COOLDOWN", compte=self.session_name, reason=reason)
+                    stats["skipped"] += 1
+                    continue
+                
                 success = self._post_in_group(group_url, post_text, images)
                 if success:
                     stats["success"] += 1
+                    # Enregistrer la publication réussie en DB
+                    self.db.record_publication(
+                        account_name=self.session_name,
+                        group_url=group_url,
+                        status="success",
+                        post_content=post_text[:200]  # Premier 200 chars
+                    )
                     # Commentaires optionnels post-publication
                     if self.config.get("add_comments", False):
                         self._add_comment_after_post()
                 else:
                     stats["skipped"] += 1
+                    self.db.record_publication(
+                        account_name=self.session_name,
+                        group_url=group_url,
+                        status="skipped",
+                        post_content=post_text[:200]
+                    )
             except (SessionExpiredError, FacebookBlockedError, RateLimitError) as e:
                 emit("ERROR", "CRITICAL_STOPPING", compte=self.session_name, error=str(e))
                 stats["errors"] += 1
+                # Mettre à jour le statut du compte en DB
+                if isinstance(e, FacebookBlockedError):
+                    self.db.record_account_block(self.session_name, "facebook_block", str(e))
+                elif isinstance(e, SessionExpiredError):
+                    self.db.update_account_status(self.session_name, "session_expired")
                 break
             except Exception as e:
                 emit("ERROR", "GROUP_ERROR", groupe=group_url[:80], error=str(e))
-                self.engine.screenshot_on_error(self._page, f"group_err_{idx}")
+                screenshot_path = self.engine.screenshot_on_error(self._page, f"group_err_{idx}")
                 stats["errors"] += 1
+                # Enregistrer l'erreur en DB avec screenshot
+                self.db.record_error(
+                    account_name=self.session_name,
+                    group_url=group_url,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    screenshot_path=screenshot_path
+                )
 
             # Délai entre groupes (sauf dernier)
             if idx < len(groups_to_process):
@@ -214,7 +275,9 @@ class Scraper:
         try:
             btn = self.selectors.find(page, "display_input", timeout=10000)
             btn.click()
+            self.health_manager.record_success("display_input")
         except SelectorNotFound:
+            self.health_manager.record_failure("display_input")
             emit("WARN", "DISPLAY_INPUT_NOT_FOUND", url=group_url[:80])
             return False
         human_delay(1.5, 0.5)
@@ -228,8 +291,10 @@ class Scraper:
             field.click()
             # press_sequentially = API Playwright correcte (pas de boucle manuell)
             field.press_sequentially(post_text, delay=random.randint(40, 160))
+            self.health_manager.record_success("input")
             human_delay(1.0, 0.3)
         except SelectorNotFound:
+            self.health_manager.record_failure("input")
             emit("WARN", "INPUT_NOT_FOUND", url=group_url[:80])
             return False
 
@@ -248,6 +313,7 @@ class Scraper:
         try:
             submit = self.selectors.find(page, "submit", timeout=10000)
             submit.click()
+            self.health_manager.record_success("submit")
             post_publication_wait()
             emit("SUCCESS", "POST_PUBLISHED",
                  compte=self.session_name,
@@ -255,6 +321,7 @@ class Scraper:
                  preview=post_text[:60])
             return True
         except SelectorNotFound:
+            self.health_manager.record_failure("submit")
             emit("ERROR", "SUBMIT_NOT_FOUND", url=group_url[:80])
             self.engine.screenshot_on_error(page, "submit_missing")
             return False
