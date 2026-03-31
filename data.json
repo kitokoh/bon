@@ -1,58 +1,13 @@
 {
+    "_comment": "Exemple de fichier de données. Utilisez migrate_data.py pour importer vos données réelles.",
     "posts": [
         {
-            "text": "7.png\n\nمكابس هيدروليكية بتقنيات متطورة وأسعار لا تقبل المنافسة",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\7.png",
-            "timestamp": "2025-05-16T10:48:30.729777"
-        },
-        {
-            "text": "8.jpg\n\nمكابس هيدروليكية بتقنيات متطورة وأسعار لا تقبل المنافسة",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\8.jpg",
-            "timestamp": "2025-05-16T10:48:30.729807"
-        },
-        {
-            "text": "9.jpg\n\nمكابس هيدروليكية بتقنيات متطورة وأسعار لا تقبل المنافسة",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\9.jpg",
-            "timestamp": "2025-05-16T10:48:30.729814"
-        },
-        {
-            "text": "10.jpg\n\nمكابس هيدروليكية بتقنيات متطورة وأسعار لا تقبل المنافسة",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\10.jpg",
-            "timestamp": "2025-05-16T10:48:30.729820"
-        },
-        {
-            "text": "11.jpg\n\nمكابس هيدروليكية بتقنيات متطورة وأسعار لا تقبل المنافسة",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\11.jpg",
-            "timestamp": "2025-05-16T10:48:30.729825"
-        },
-        {
-            "text": "12.jpg\n\nمكابس هيدروليكية بتقنيات متطورة وأسعار لا تقبل المنافسة",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\12.jpg",
-            "timestamp": "2025-05-16T10:48:30.730064"
+            "text": "Votre texte de publication ici",
+            "image": "exemple.jpg",
+            "weight": 1
         }
     ],
     "groups": [
-        "https://www.facebook.com/groups/865531597256624",
-        "https://www.facebook.com/groups/1533868653533875/",
-        "https://www.facebook.com/groups/2309210009291237/",
-        "https://www.facebook.com/groups/119929018423623/",
-        "https://www.facebook.com/groups/1914166852277174/",
-        "https://www.facebook.com/groups/249218873426277/",
-        "https://www.facebook.com/groups/382896815533960/",
-        "https://www.facebook.com/groups/501089116661238/",
-        "https://www.facebook.com/groups/313539295727010/",
-        "https://www.facebook.com/groups/2939025449709547/",
-        "https://www.facebook.com/groups/753693605432949/",
-        "https://www.facebook.com/groups/785886162129417/",
-        "https://www.facebook.com/groups/887867051269561/",
-        "https://www.facebook.com/groups/pressegypt/",
-        "https://www.facebook.com/groups/208073056046127/",
-        "https://www.facebook.com/groups/1335838006878557/",
-        "https://www.facebook.com/groups/1980706472159891/",
-        "https://www.facebook.com/groups/2245742298849513/",
-        "https://www.facebook.com/groups/266563507144846/",
-        "https://www.facebook.com/groups/1713003238853136/",
-        "https://www.facebook.com/groups/668946039826955",
-        "https://www.facebook.com/groups/1090039738545144/"
+        "https://www.facebook.com/groups/XXXXXXXXXXXXXXXXX/"
     ]
 }

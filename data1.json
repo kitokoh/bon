@@ -1,58 +1,13 @@
 {
+    "_comment": "Exemple de fichier stories. Utilisez migrate_data.py pour importer vos données réelles.",
     "stories": [
         {
-            "text": "7.png",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\7.png",
-            "duration": 10
-        },
-        {
-            "text": "8.jpg",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\8.jpg",
-            "duration": 10
-        },
-        {
-            "text": "9.jpg",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\9.jpg",
-            "duration": 10
-        },
-        {
-            "text": "10.jpg",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\10.jpg",
-            "duration": 10
-        },
-        {
-            "text": "11.jpg",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\11.jpg",
-            "duration": 10
-        },
-        {
-            "text": "12.jpg",
-            "image": "C:\\Users\\Administrator\\AppData\\Roaming\\saadiya\\media\\media10\\12.jpg",
+            "text": "Votre texte de story ici",
+            "image": "exemple.jpg",
             "duration": 10
         }
     ],
     "groups": [
-        "https://www.facebook.com/groups/865531597256624",
-        "https://www.facebook.com/groups/1533868653533875/",
-        "https://www.facebook.com/groups/2309210009291237/",
-        "https://www.facebook.com/groups/119929018423623/",
-        "https://www.facebook.com/groups/1914166852277174/",
-        "https://www.facebook.com/groups/249218873426277/",
-        "https://www.facebook.com/groups/382896815533960/",
-        "https://www.facebook.com/groups/501089116661238/",
-        "https://www.facebook.com/groups/313539295727010/",
-        "https://www.facebook.com/groups/2939025449709547/",
-        "https://www.facebook.com/groups/753693605432949/",
-        "https://www.facebook.com/groups/785886162129417/",
-        "https://www.facebook.com/groups/887867051269561/",
-        "https://www.facebook.com/groups/pressegypt/",
-        "https://www.facebook.com/groups/208073056046127/",
-        "https://www.facebook.com/groups/1335838006878557/",
-        "https://www.facebook.com/groups/1980706472159891/",
-        "https://www.facebook.com/groups/2245742298849513/",
-        "https://www.facebook.com/groups/266563507144846/",
-        "https://www.facebook.com/groups/1713003238853136/",
-        "https://www.facebook.com/groups/668946039826955",
-        "https://www.facebook.com/groups/1090039738545144/"
+        "https://www.facebook.com/groups/XXXXXXXXXXXXXXXXX/"
     ]
 }
