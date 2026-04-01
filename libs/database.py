@@ -46,7 +46,8 @@ class BONDatabase:
                 db_path = "logs/bon.db"
 
         self.db_path = pathlib.Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if str(self.db_path) != ":memory:":
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._init_db()
 
@@ -55,11 +56,23 @@ class BONDatabase:
     # ──────────────────────────────────────────
 
     def _connect(self) -> sqlite3.Connection:
+        # Si :memory:, on garde la même connexion pour toute la durée de l'instance
+        if str(self.db_path) == ":memory:":
+            if not hasattr(self, "_memory_conn"):
+                self._memory_conn = sqlite3.connect(":memory:", check_same_thread=False)
+                self._memory_conn.row_factory = sqlite3.Row
+            return self._memory_conn
+
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
+
+    def _close(self, conn: sqlite3.Connection):
+        """Ferme la connexion si ce n'est pas une base en mémoire."""
+        if str(self.db_path) != ":memory:":
+            conn.close()
 
     def _exec(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Exécute une requête sans retour de résultat."""
@@ -70,7 +83,7 @@ class BONDatabase:
                 conn.commit()
                 return cur
             finally:
-                conn.close()
+                self._close(conn)
 
     def _query(self, sql: str, params: tuple = ()) -> List[Dict]:
         """Exécute une requête SELECT et retourne une liste de dicts."""
@@ -80,7 +93,7 @@ class BONDatabase:
                 cur = conn.execute(sql, params)
                 return [dict(row) for row in cur.fetchall()]
             finally:
-                conn.close()
+                self._close(conn)
 
     def _query_one(self, sql: str, params: tuple = ()) -> Optional[Dict]:
         """Exécute une requête SELECT et retourne un seul dict ou None."""
@@ -96,7 +109,7 @@ class BONDatabase:
                 row = cur.fetchone()
                 return row[0] if row else None
             finally:
-                conn.close()
+                self._close(conn)
 
     # ──────────────────────────────────────────
     # Initialisation du schéma
@@ -225,7 +238,7 @@ class BONDatabase:
                 conn.commit()
                 emit("INFO", "DATABASE_INITIALIZED", path=str(self.db_path))
             finally:
-                conn.close()
+                self._close(conn)
 
     # ──────────────────────────────────────────
     # Helpers internes
@@ -267,7 +280,7 @@ class BONDatabase:
                 conn.commit()
                 return cur.lastrowid
             finally:
-                conn.close()
+                self._close(conn)
 
     def ensure_account_exists(self, name: str, email: str = None,
                                profile_url: str = None) -> int:
@@ -361,7 +374,9 @@ class BONDatabase:
 
         # Limite quotidienne
         account_id = row["id"]
-        today = datetime.now().date().isoformat()
+        now = datetime.now()
+        today = now.date().isoformat()
+
         posts_today = self._query_scalar(
             "SELECT COUNT(*) FROM publications WHERE account_id = ? AND DATE(created_at) = ?",
             (account_id, today)
@@ -370,6 +385,18 @@ class BONDatabase:
 
         if posts_today >= max_per_day:
             return False, f"Limite quotidienne atteinte ({posts_today}/{max_per_day})"
+
+        # Limite horaire (max 5 par heure par défaut)
+        one_hour_ago = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        posts_last_hour = self._query_scalar(
+            "SELECT COUNT(*) FROM publications WHERE account_id = ? AND created_at > ? AND status = 'success'",
+            (account_id, one_hour_ago)
+        ) or 0
+
+        # On peut rendre ça configurable via une colonne dans accounts plus tard si besoin
+        max_per_hour = 5
+        if posts_last_hour >= max_per_hour:
+            return False, f"Limite horaire atteinte ({posts_last_hour}/{max_per_hour})"
 
         return True, "OK"
 
@@ -440,7 +467,7 @@ class BONDatabase:
                 conn.commit()
                 return cur.lastrowid
             finally:
-                conn.close()
+                self._close(conn)
 
     def get_group_by_url(self, url: str) -> Optional[Dict]:
         return self._query_one("SELECT * FROM groups WHERE url = ?", (url,))
@@ -543,7 +570,7 @@ class BONDatabase:
                 conn.commit()
                 return pub_id
             finally:
-                conn.close()
+                self._close(conn)
 
     def get_publications(self, account_name: str = None,
                          group_url: str = None, limit: int = 50) -> List[Dict]:

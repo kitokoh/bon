@@ -18,6 +18,22 @@ LOG_FILE = LOGS_DIR / "activity.jsonl"
 PID_FILE = LOGS_DIR / "running.pid"
 
 
+def _rotate_logs_if_needed(max_size_mb: int = 5) -> None:
+    """Effectue une rotation du fichier de log si la taille dépasse max_size_mb."""
+    if not LOG_FILE.exists():
+        return
+
+    if LOG_FILE.stat().st_size > max_size_mb * 1024 * 1024:
+        # Rotation simple (on ne garde qu'un backup pour l'instant)
+        backup = LOG_FILE.with_suffix(".jsonl.old")
+        try:
+            if backup.exists():
+                backup.unlink()
+            LOG_FILE.rename(backup)
+        except Exception as e:
+            print(f"[LOG] Échec rotation : {e}", file=sys.stderr)
+
+
 def emit(level: str, event: str, **kwargs) -> None:
     """
     Émet un événement de log structuré en JSON Lines.
@@ -25,6 +41,9 @@ def emit(level: str, event: str, **kwargs) -> None:
 
     Niveaux : DEBUG, INFO, SUCCESS, WARN, ERROR
     """
+    # Rotation avant d'écrire
+    _rotate_logs_if_needed()
+
     entry = {
         "ts": datetime.datetime.now().isoformat(timespec="seconds"),
         "level": level,
