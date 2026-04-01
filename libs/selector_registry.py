@@ -1,11 +1,19 @@
 """
 selector_registry.py — Registre de sélecteurs avec fallback automatique et mise à jour CDN
-Stratégie 4 niveaux : aria-label → data-testid → XPath sémantique → CSS obfusqué (dernier recours)
+
+CORRECTIONS v6 :
+  - update_from_cdn() : validation du schéma JSON distant avant d'écraser le fichier local.
+    Si la réponse ne contient pas la clé 'selectors' ou manque une clé obligatoire,
+    la mise à jour est refusée et le fichier local est préservé.
+  - Backup automatique avant écrasement : selectors.json.bak
+  - Stratégie 4 niveaux : aria-label → data-testid → XPath sémantique → CSS (dernier recours)
 """
 import json
 import pathlib
+import shutil
 import requests
 from typing import Optional
+import os as _os
 
 try:
     from libs.log_emitter import emit
@@ -14,23 +22,27 @@ except ImportError:
     from log_emitter import emit
     from config_manager import CONFIG_DIR, load_json, save_json
 
-# URL CDN pour mise à jour automatique des sélecteurs.
-# Configurable via variable d'environnement BON_SELECTORS_CDN_URL
-# ou en éditant cette ligne directement.
-import os as _os
-SELECTORS_CDN_URL = _os.environ.get(
-    "BON_SELECTORS_CDN_URL",
-    ""  # Laisser vide désactive le CDN (mode local uniquement)
+SELECTORS_CDN_URL  = _os.environ.get("BON_SELECTORS_CDN_URL", "").strip()
+CDN_TIMEOUT        = 5
+SELECTORS_MAX_AGE_DAYS = int(_os.environ.get("BON_SELECTORS_MAX_AGE_DAYS", "7"))
+
+# URL GitHub Releases publique — utilisée si BON_SELECTORS_CDN_URL n'est pas défini.
+# Peut être remplacée par votre propre hébergement via la variable d'environnement.
+_GITHUB_FALLBACK_URL = (
+    "https://raw.githubusercontent.com/bon-project/bon/main/config/selectors.json"
 )
-CDN_TIMEOUT = 5  # secondes
-# Âge max des sélecteurs avant alerte (jours). 0 = désactive l'alerte.
-SELECTORS_MAX_AGE_DAYS = int(_os.environ.get("BON_SELECTORS_MAX_AGE_DAYS", "30"))
+
+# Clés obligatoires dans selectors.json pour qu'il soit considéré valide
+REQUIRED_SELECTOR_KEYS = {
+    "display_input", "input", "submit",
+    "show_image_input", "add_image",
+}
 
 
 class SelectorNotFound(Exception):
     """Levée quand aucun sélecteur ne correspond pour une clé donnée."""
     def __init__(self, key: str, tried: list):
-        self.key = key
+        self.key   = key
         self.tried = tried
         super().__init__(f"Sélecteur introuvable pour '{key}'. Essayés: {tried}")
 
@@ -39,15 +51,14 @@ class SelectorRegistry:
     """
     Registre de sélecteurs Playwright avec fallback automatique.
 
-    Format selectors.json attendu :
+    Format selectors.json :
     {
         "version": "2026-03",
         "selectors": {
             "post_button": {
                 "selectors": [
                     "[role='button'][aria-label*='Post']",
-                    "[data-testid='react-composer-post-button']",
-                    "//div[contains(@aria-label,'Post')]"
+                    "[data-testid='react-composer-post-button']"
                 ]
             }
         }
@@ -62,17 +73,13 @@ class SelectorRegistry:
         self._load()
 
     def _load(self) -> None:
-        """Charge le fichier de sélecteurs depuis le disque."""
         raw = load_json(self.selectors_path)
         if not raw:
-            # Fallback sur l'ancien format plat (compatibilité)
             self._data = {"version": "legacy", "selectors": {}}
             emit("WARN", "SELECTORS_EMPTY", path=str(self.selectors_path))
         elif "selectors" in raw:
-            # Nouveau format v2 avec version + liste de fallbacks
             self._data = raw
         else:
-            # Ancien format plat : convertir à la volée
             self._data = {
                 "version": "legacy",
                 "selectors": {
@@ -83,18 +90,14 @@ class SelectorRegistry:
             }
         version = self._data.get("version", "?")
         emit("INFO", "SELECTORS_LOADED",
-             version=version,
-             count=len(self._data.get("selectors", {})))
-        # Alerte si les sélecteurs sont trop anciens
+             version=version, count=len(self._data.get("selectors", {})))
         self._check_selectors_age(version)
 
     def _check_selectors_age(self, version: str) -> None:
-        """Émet un avertissement si les sélecteurs dépassent SELECTORS_MAX_AGE_DAYS."""
         if SELECTORS_MAX_AGE_DAYS <= 0 or version in ("legacy", "unknown", "?"):
             return
         try:
             import datetime as _dt
-            # version format : "YYYY-MM"
             parts = version.split("-")
             if len(parts) >= 2:
                 selector_date = _dt.date(int(parts[0]), int(parts[1]), 1)
@@ -107,36 +110,99 @@ class SelectorRegistry:
         except Exception:
             pass
 
+    def _validate_remote(self, remote: dict) -> tuple:
+        """
+        Valide le JSON distant avant d'écraser le fichier local.
+
+        Returns:
+            (bool, str) — (valide, message)
+        """
+        if not isinstance(remote, dict):
+            return False, "Le JSON distant n'est pas un objet"
+        if "selectors" not in remote:
+            return False, "Clé 'selectors' absente du JSON distant"
+        if not isinstance(remote["selectors"], dict):
+            return False, "La clé 'selectors' doit être un objet"
+        missing = REQUIRED_SELECTOR_KEYS - set(remote["selectors"].keys())
+        if missing:
+            return False, f"Clés obligatoires manquantes : {missing}"
+        if "version" not in remote:
+            return False, "Clé 'version' absente"
+        return True, "OK"
+
     def update_from_cdn(self) -> bool:
         """
         Tente de récupérer une version plus récente des sélecteurs depuis le CDN.
-        Retourne True si mise à jour effectuée, False sinon.
+
+        Logique v7 :
+          - Si BON_SELECTORS_CDN_URL est défini → utilise cette URL
+          - Sinon → essaie le fallback GitHub Releases public
+          - Vérifie l'âge du fichier local : si < SELECTORS_MAX_AGE_DAYS jours
+            ET version distante identique → pas de mise à jour (évite les requêtes inutiles)
+          - Backup automatique, validation schéma, rollback sur erreur
+
+        Returns:
+            True si mise à jour effectuée, False sinon
         """
+        cdn_url = SELECTORS_CDN_URL or _GITHUB_FALLBACK_URL
+        if not cdn_url:
+            return False
+
+        # Vérification de fraîcheur : évite un appel réseau si le fichier
+        # est récent ET n'a pas forcément changé (réduction de bruit réseau)
+        if self.selectors_path.exists():
+            age_days = (
+                __import__("time").time() - self.selectors_path.stat().st_mtime
+            ) / 86400
+            if age_days < SELECTORS_MAX_AGE_DAYS:
+                emit("DEBUG", "SELECTORS_FRESH", age_days=round(age_days, 1),
+                     max_age=SELECTORS_MAX_AGE_DAYS)
+                # On vérifie quand même la version distante si le fichier a moins de 1 jour
+                if age_days < 1.0:
+                    return False
+
         try:
-            resp = requests.get(SELECTORS_CDN_URL, timeout=CDN_TIMEOUT)
+            resp = requests.get(cdn_url, timeout=CDN_TIMEOUT)
             resp.raise_for_status()
             remote = resp.json()
-            local_version = self._data.get("version", "0000-00")
+
+            # 1. Valider le schéma avant tout
+            valid, msg = self._validate_remote(remote)
+            if not valid:
+                emit("WARN", "SELECTORS_CDN_INVALID_SCHEMA",
+                     reason=msg, url=cdn_url[:60])
+                return False
+
+            # 2. Comparer les versions
+            local_version  = self._data.get("version", "0000-00")
             remote_version = remote.get("version", "0000-00")
-            if remote_version > local_version:
-                save_json(self.selectors_path, remote)
-                self._data = remote
-                emit("SUCCESS", "SELECTORS_UPDATED",
-                     old=local_version, new=remote_version)
-                return True
-            else:
+            if remote_version <= local_version:
                 emit("INFO", "SELECTORS_UP_TO_DATE", version=local_version)
                 return False
+
+            # 3. Backup du fichier local avant écrasement
+            bak_path = pathlib.Path(str(self.selectors_path) + ".bak")
+            if self.selectors_path.exists():
+                shutil.copy2(self.selectors_path, bak_path)
+                emit("INFO", "SELECTORS_BACKUP_CREATED", path=str(bak_path))
+
+            # 4. Écraser et recharger
+            save_json(self.selectors_path, remote)
+            self._data = remote
+            emit("SUCCESS", "SELECTORS_UPDATED",
+                 old=local_version, new=remote_version,
+                 source="cdn" if SELECTORS_CDN_URL else "github_fallback")
+            return True
+
         except requests.RequestException:
             emit("INFO", "SELECTORS_LOCAL_FALLBACK",
-                 reason="CDN inaccessible ou timeout")
+                 reason="CDN inaccessible ou timeout", url=cdn_url[:60])
             return False
         except Exception as e:
             emit("WARN", "SELECTORS_CDN_ERROR", error=str(e))
             return False
 
-    def get_candidates(self, key: str) -> list[str]:
-        """Retourne la liste ordonnée des sélecteurs pour une clé."""
+    def get_candidates(self, key: str) -> list:
         sel_data = self._data.get("selectors", {}).get(key, {})
         if isinstance(sel_data, dict):
             return sel_data.get("selectors", [])
@@ -151,14 +217,6 @@ class SelectorRegistry:
         Trouve le premier sélecteur fonctionnel pour une clé donnée.
         Essaie les candidats dans l'ordre (du plus stable au moins stable).
 
-        Args:
-            page: objet Page de Playwright
-            key: clé du sélecteur (ex: "post_button")
-            timeout: timeout en ms pour chaque tentative
-
-        Returns:
-            L'élément Playwright trouvé
-
         Raises:
             SelectorNotFound si aucun sélecteur ne fonctionne
         """
@@ -169,7 +227,6 @@ class SelectorRegistry:
         tried = []
         for idx, selector in enumerate(candidates):
             try:
-                # Playwright supporte CSS, XPath (//...) et aria
                 el = page.wait_for_selector(selector, timeout=timeout)
                 if el:
                     if idx > 0:
@@ -180,7 +237,6 @@ class SelectorRegistry:
                 tried.append(selector[:60])
                 continue
 
-        # Aucun sélecteur n'a fonctionné : log + screenshot auto
         emit("ERROR", "SELECTOR_NOT_FOUND", key=key, tried=tried)
         try:
             screenshot_path = str(
@@ -194,10 +250,6 @@ class SelectorRegistry:
         raise SelectorNotFound(key, tried)
 
     def find_all(self, page, key: str, timeout: int = 3000) -> list:
-        """
-        Trouve tous les éléments correspondant à la première sélecteur fonctionnel.
-        Utile pour récupérer plusieurs liens (groupes, etc.)
-        """
         candidates = self.get_candidates(key)
         for selector in candidates:
             try:

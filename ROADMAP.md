@@ -1,175 +1,89 @@
 # BON — Feuille de route & suivi qualité
 
-> Dernière mise à jour : version 3 (post-audit v1 + v2)
+> Dernière mise à jour : **version 7** (améliorations critiques post-v6)
 
 ---
 
-## ✅ Corrections appliquées dans cette version
+## ✅ Améliorations appliquées dans cette version (v7)
 
-### 🔴 Bugs critiques (crash garanti corrigés)
-
-| # | Fichier | Problème | Correction |
-|---|---------|----------|------------|
-| 1 | `libs/scraper.py` | `record_publication()` et `record_error()` passaient des strings (`account_name`, `group_url`) là où `database.py` attendait des entiers (`account_id`, `group_id`) → crash SQLite | Les méthodes DB acceptent maintenant `Union[int, str]` et font la résolution id/nom en interne |
-| 2 | `libs/scraper.py` | `health_manager.record_success("key")` — argument `used_selector` manquant (TypeError) | Signature rendue optionnelle avec default `""` dans `SelectorHealthManager` |
-| 3 | `libs/scraper.py` | `health_manager.record_failure("key")` — arguments `reason` et `tried_selectors` manquants (TypeError) | Idem — les deux rendus optionnels |
-| 4 | `libs/database.py` | `record_account_block()` insérait dans la colonne `blocked_at` qui n'existe pas dans le schéma (la colonne s'appelle `started_at`) → OperationalError | Correction de la colonne `blocked_at` → `started_at` |
-| 5 | `libs/database.py` | `can_account_post(account_id: int)` recevait un string → `get_account_by_id()` retournait None → tous les posts bloqués silencieusement | Méthode accepte maintenant `Union[int, str]` |
-| 6 | `libs/error_handlers.py` | Détection CAPTCHA toujours vraie : `frame_locator()` retourne toujours un objet Locator (jamais None) → `if captcha_frame` toujours True | Remplacé par `page.locator("iframe[src*='recaptcha']").count() > 0` |
-
-### 🔴 Sécurité critique
-
-| # | Fichier | Problème | Correction |
-|---|---------|----------|------------|
-| 7 | `libs/scraper.py` + `libs/database.py` | `scraper.close()` sérialisait les cookies Facebook (storage_state) et les stockait en clair dans la colonne `storage_state` de SQLite → exposition de tous les comptes si `bon.db` est volé ou partagé | Suppression de la colonne `storage_state` du schéma. Les cookies restent exclusivement dans les fichiers `{session}_state.json` sur disque |
-
-### 🟠 Bugs architecturaux
-
-| # | Fichier | Problème | Correction |
-|---|---------|----------|------------|
-| 8 | `automation/__init__.py` | Import inconditionnel de `SeleniumEngine` crashait si Selenium n'est pas installé (supprimé des dépendances dans `requirements.txt`) | Import conditionnel dans un bloc `try/except ImportError` |
-| 9 | `libs/database.py` | Singleton `get_database()` non thread-safe — double initialisation possible en multi-thread | Ajout de `threading.Lock` avec double-checked locking |
-| 10 | `automation/selector_health.py` | Même problème de singleton non thread-safe | Même correction |
-| 11 | `libs/database.py` | Chaque méthode ouvrait sa propre connexion SQLite via `@contextmanager` sans verrou → écritures concurrentes possibles | Refactoring vers méthodes privées `_exec()`, `_query()`, `_query_one()` avec `self._lock` |
-
-### 🟡 Bugs mineurs
-
-| # | Fichier | Problème | Correction |
-|---|---------|----------|------------|
-| 12 | `libs/scraper.py` | Condition `elif not images` après `if images` — branche toujours vraie (redondant) | Remplacé par `else` |
-| 13 | `libs/scraper.py` (marketplace) | `page.set_input_files("input[type='file']", ...)` — sélecteur trop générique, peut cibler le mauvais input | Remplacé par `self.selectors.get_candidates("add_image")[0]` |
-
-### 🟡 Qualité & robustesse
+### 🔴 Sécurité anti-détection (P1 résolu définitivement)
 
 | # | Fichier | Amélioration |
 |---|---------|-------------|
-| 14 | `.gitignore` | Ajout de `*.db`, `*.jsonl`, `*.pid`, `scraper.log`, `*_state.json`, `data/anti_block_state.json`, `logs/errors/`, `logs/screenshots/` |
-| 15 | `libs/database.py` | Ajout de `PRAGMA journal_mode=WAL` (performance SQLite) et `PRAGMA foreign_keys=ON` (intégrité référentielle) |
-| 16 | `libs/database.py` | `record_publication()` tronque `post_content` à 500 chars (évite des entrées DB volumineuses) |
+| E1 | `libs/stealth_profile.py` *(nouveau)* | Fingerprinting anti-détection natif via CDP Playwright — **0 dépendance externe**. Techniques : `navigator.webdriver → undefined`, Canvas 2D noise par session, WebGL vendor/renderer spoofing, plugins réalistes, `deviceMemory`/`hardwareConcurrency` cohérents, `window.chrome` injecté, `navigator.languages` sync locale, headers HTTP `Sec-Ch-Ua`. Pool de 7 profils matériels + 7 user-agents Chromium 122-124. |
+| E2 | `libs/scraper.py` | `StealthProfile.apply(page)` appelé automatiquement dans `Scraper.open()` après création de la page, **avant toute navigation**. |
+| E3 | `libs/session_manager.py` | `DEFAULT_SESSION_CONFIG` : `"platform": "windows"` pour cohérence matérielle du fingerprint. |
+
+### 🔴 Résilience multi-comptes (nouveau)
+
+| # | Fichier | Amélioration |
+|---|---------|-------------|
+| F1 | `libs/circuit_breaker.py` *(nouveau)* | Circuit breaker par compte, pattern CLOSED → OPEN → HALF-OPEN. `failure_threshold=3`, `recovery_timeout_s=900`, `half_open_max_ok=2`. Thread-safe, singleton. |
+| F2 | `libs/scraper.py` | Circuit breaker vérifié en tête de boucle. `record_success/failure` à chaque groupe. Erreurs critiques ouvrent le circuit immédiatement. |
+
+### 🟠 Alertes push Telegram (P5 résolu)
+
+| # | Fichier | Amélioration |
+|---|---------|-------------|
+| G1 | `libs/notifier.py` *(nouveau)* | Alertes Telegram via `urllib.request` stdlib — **0 dépendance externe**. Messages HTML pour blocage, session expirée, CAPTCHA, circuit ouvert, résumé run, health bas. Envoi async (daemon thread), **jamais bloquant**. |
+| G2 | `libs/notifier.py` | Config : vars env `BON_TELEGRAM_TOKEN/CHAT_ID` > champ `"telegram"` session > `logs/telegram.json`. |
+| G3 | `libs/scraper.py` | `notify_critical()` dans les except critiques. `notify_run_summary()` + alerte health en fin de boucle. |
+
+### 🟡 Health score adaptatif + warmup progressif
+
+| # | Fichier | Amélioration |
+|---|---------|-------------|
+| H1 | `libs/database.py` | Colonne `consecutive_failures` + migration idempotente. `record_publication` success → `health_score+2`, failure → `health_score-5`. |
+| H2 | `libs/database.py` | `mark_warmup_completed()` + `get_health_score()`. |
+| I1 | `libs/scraper.py` | Nouveaux comptes (`warmup_completed=0`) : run bridé à 3 groupes / 2 par heure automatiquement. |
+| I2 | `libs/scraper.py` | 1er succès → `mark_warmup_completed()` → limites normales au prochain run. |
+
+### 🟡 CDN sélecteurs amélioré (P3 partiellement résolu)
+
+| # | Fichier | Amélioration |
+|---|---------|-------------|
+| J1 | `libs/selector_registry.py` | Fallback GitHub Releases automatique si `BON_SELECTORS_CDN_URL` non défini. |
+| J2 | `libs/selector_registry.py` | Vérification d'âge du fichier local avant requête. `SELECTORS_MAX_AGE_DAYS` : 30 → **7 jours**. |
 
 ---
 
-## ⚠️ Problèmes connus non corrigés dans cette version
+## 📊 Récapitulatif par version
 
-### 🔴 Priorité haute
-
-#### P1 — Trois systèmes de rate-limiting non synchronisés
-**Fichiers** : `libs/timing_humanizer.py`, `libs/database.py`, `automation/anti_block.py`
-
-Ces trois composants implémentent chacun leur propre logique de contrôle de fréquence sur des sources de données différentes (JSON de session, SQLite, JSON anti-block), sans jamais se consulter :
-
-- `timing_humanizer` → lit `last_run_ts` dans le JSON de session
-- `database.can_account_post()` → lit `cooldown_until` dans SQLite
-- `AntiBlockManager.can_post()` → lit `anti_block_state.json`
-
-`AntiBlockManager` n'est d'ailleurs jamais appelé dans le flux principal (`scraper.py` ne l'importe pas).
-
-**Correction recommandée** : désigner une seule source de vérité (la DB SQLite), migrer toute la logique de cooldown dans `database.can_account_post()`, et supprimer les doublons dans `timing_humanizer`. `AntiBlockManager` peut rester comme outil de monitoring mais ne doit pas être une source d'autorité séparée.
-
-#### P2 — Package `automation/` partiellement mort à l'exécution
-**Fichiers** : `automation/engine.py`, `automation/playwright_engine.py`
-
-`__main__.py` et `scraper.py` importent directement `libs/playwright_engine.py`. `AutomationEngine` et `PlaywrightWrapper` (dans `automation/`) ne sont jamais instanciés dans le flux réel. Ce package est documenté comme "interface unifiée" mais n'est pas utilisé comme tel.
-
-**Correction recommandée** : soit `scraper.py` utilise `AutomationEngine` comme point d'entrée unique, soit le dossier `automation/engine.py` et `automation/playwright_engine.py` sont supprimés pour éviter la confusion. La décision architecturale doit être tranchée explicitement.
-
-### 🟠 Priorité moyenne
-
-#### P3 — `_apply_theme()` : logique de remplacement fragile
-**Fichier** : `libs/scraper.py`
-
-```python
-sel = candidates[0].replace("index", str(theme_idx))
-```
-
-Cette ligne suppose que le sélecteur contient le mot littéral `"index"` comme placeholder. Si `selectors.json` est modifié et que le placeholder change de nom ou disparaît, le remplacement échoue silencieusement (le sélecteur reste invalide sans erreur).
-
-**Correction recommandée** : utiliser un format template explicite dans `selectors.json` (ex: `{theme_index}`) et appliquer `str.format(theme_index=theme_idx)` avec un try/except qui log l'anomalie.
-
-#### P4 — `automation/selector_tester.py` : erreur Python dans le code
-**Fichier** : `automation/selector_tester.py`, ligne ~100
-
-```python
-text = element.evaluate("el => el.innerText[:200]")
-```
-
-JavaScript ne supporte pas la syntaxe de slicing Python `[:200]`. Ce code produira une `SyntaxError` JavaScript à l'exécution.
-
-**Correction** : `element.evaluate("el => el.innerText.substring(0, 200)")`
-
-#### P5 — `logs/bon.db` et `logs/activity.jsonl` présents dans l'archive
-Ces fichiers de données runtime sont embarqués dans le zip/dépôt. Ils peuvent contenir des données de session ou de debug sensibles.
-
-**Correction** : s'assurer que `.gitignore` est bien pris en compte avant chaque archivage. Utiliser `git clean -xdf` ou un script de packaging qui exclut explicitement `logs/`.
-
-### 🟡 Priorité basse
-
-#### P6 — Fichiers vestiges à la racine
-`__post_in_groups__.py`, `__post_in_groupsx__.py`, `__save_groups__.py` sont des scripts standalone de l'ancienne architecture. Ils ne sont référencés nulle part dans le code actuel et utilisent potentiellement d'anciennes APIs.
-
-**Action** : archiver dans un dossier `legacy/` ou supprimer après vérification qu'ils ne sont pas utilisés en dehors du projet (ex: scripts cron externes).
-
-#### P7 — `env1/` dans l'archive de distribution
-Le virtualenv complet (~35MB) est inclus dans le zip. C'est une mauvaise pratique : il contient des binaires compilés spécifiques à une plateforme, des fichiers de licence tiers, et gonfle inutilement la taille du projet.
-
-**Action** : exclure `env1/` et `env/` du `.gitignore` (déjà fait dans cette version) et du processus d'archivage.
-
-#### P8 — Données personnelles dans `data.json` / `data1.json`
-Les tests unitaires dans `test_smoke.py` (classe `TestDataFiles`) vérifient déjà l'absence de chemins Windows personnels. Cependant, le contenu réel des fichiers n'a pas été audité dans cette révision.
-
-**Action** : passer `python -m pytest tests/test_smoke.py::TestDataFiles -v` et corriger toute assertion échouée.
+| Version | Points clés | Fichiers modifiés |
+|---------|-------------|-------------------|
+| v3 | Bugs critiques fondateurs (deadlock DB, crash JS) | 8 |
+| v4 | Proxy par contexte, anti_block unifié | 6 |
+| v5 | Validation config, locale/timezone, CDN sélecteurs | 5 |
+| v6 | Architecture legacy, rate-limit DB unifié, rotation logs | 12 |
+| **v7** | **Stealth CDP, circuit breaker, Telegram, health score adaptatif, warmup** | **7** |
 
 ---
 
-## 🗺️ Prochaines étapes recommandées (roadmap fonctionnelle)
+## ⚠️ Problèmes restants
 
-| Priorité | Fonctionnalité | Description |
-|----------|---------------|-------------|
-| 🔴 | Unification rate-limiting | Fusionner timing_humanizer + DB cooldown en une seule source de vérité |
-| 🔴 | Décision architecture automation/ | Choisir entre garder `AutomationEngine` comme façade unique ou supprimer le doublon |
-| 🟠 | Tests d'intégration | Ajouter des tests qui mockent Playwright et vérifient le flux complet sans navigateur |
-| 🟠 | Chiffrement des sessions | Si les fichiers `_state.json` sont sur un serveur partagé, chiffrer avec `pycryptodome` |
-| 🟠 | Dashboard PyQt | Connecter `tools/dashboard.py` à `get_database()` pour un affichage temps réel |
-| 🟡 | Rotation de logs | `activity.jsonl` croît indéfiniment — ajouter une rotation (ex: `logging.handlers.RotatingFileHandler`) |
-| 🟡 | CDN sélecteurs | Configurer `BON_SELECTORS_CDN_URL` et héberger `selectors.json` pour mise à jour auto |
-| 🟡 | Multi-session parallèle | Permettre le lancement de plusieurs sessions simultanées via ThreadPoolExecutor |
-| 🟡 | Warmup progressif | Implémenter la logique `warmup_completed` déjà présente dans le schéma DB |
+### 🟠 P4 — Résolution CAPTCHA automatique
+Détection OK, alerte Telegram OK. Résolution nécessite une intégration tierce.
 
----
-
-## 📁 Fichiers modifiés dans cette version
-
-```
-libs/
-  database.py          ← Refactorisé (signatures, sécurité, thread-safety)
-  scraper.py           ← Corrigé (appels DB, health_manager, CAPTCHA)
-  error_handlers.py    ← Corrigé (détection CAPTCHA)
-
-automation/
-  __init__.py          ← Corrigé (Selenium optionnel)
-  selector_health.py   ← Corrigé (signatures + thread-safety)
-
-.gitignore             ← Complété
-ROADMAP.md             ← Ce fichier
+```bash
+pip install 2captcha-python
+export TWOCAPTCHA_API_KEY="votre_clé"
 ```
 
-## 📁 Fichiers inchangés
+### 🟠 P6 — Tests E2E (couverture 0%)
+41 tests unitaires solides. Flux complet non testé. Dépendances : `pytest-playwright` + mock Facebook.
 
+### 🟡 P7 — URL CDN production à configurer
+Le fallback GitHub pointe vers un dépôt exemple. Pour production :
+
+```bash
+export BON_SELECTORS_CDN_URL="https://github.com/votre-org/bon/releases/latest/download/selectors.json"
 ```
-libs/playwright_engine.py
-libs/selector_registry.py
-libs/session_manager.py
-libs/config_manager.py
-libs/config_validator.py
-libs/timing_humanizer.py
-libs/log_emitter.py
-automation/engine.py
-automation/anti_block.py
-automation/playwright_engine.py
-automation/selenium_engine.py
-automation/selector_tester.py
-__main__.py
-requirements.txt
-tests/test_smoke.py
-config/selectors.json
-```
+
+### 🟢 Améliorations futures (non bloquantes)
+
+| # | Idée | Complexité |
+|---|------|-----------|
+| K1 | Rotation de proxies résidentiels entre groupes | Moyenne |
+| K2 | Dashboard Flask/FastAPI monitoring health scores | Haute |
+| K3 | Export CSV/Excel des stats de publication | Faible |
+| K4 | Scheduler intégré (`apscheduler`) | Moyenne |

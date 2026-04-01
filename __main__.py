@@ -1,441 +1,343 @@
 """
-__main__.py — Point d'entrée du module BON
-Tourne en autonome dans son propre venv.
-L'app PyQt lance ce module via subprocess et lit ses logs (activity.jsonl).
+__main__.py v9 — Point d'entrée BON
 
 Commandes :
-  python -m bon post --session <nom>          Publier (1 image par groupe)
-  python -m bon post-multi --session <nom>    Publier (multi-images)
-  python -m bon marketplace --session <nom>   Publier dans Marketplace
-  python -m bon save-groups --session <nom> --keyword <mot>
-  python -m bon login --session <nom>         Créer une session (login manuel)
-  python -m bon list-sessions                 Lister les sessions
-  python -m bon verify --session <nom>        Vérifier l'état d'une session
+  python -m bon robot create --robot <nom> [--account <nom>]
+  python -m bon robot list
+  python -m bon robot verify --robot <nom>
+  python -m bon robot delete --robot <nom>
+  python -m bon post --robot <nom> [--headless]
+  python -m bon save-groups --robot <nom> --keyword <mot>
+  python -m bon comment --robot <nom> --urls url1,url2
+  python -m bon dm --robot <nom> --target <url> --text <txt>
+  python -m bon dm-queue --robot <nom>
+  python -m bon migrate [--sessions] [--data]
+  python -m bon dashboard
 """
-import sys
-import argparse
-import pathlib
+import sys, argparse, pathlib
 
-# ── Vérification licence ───────────────────────────────────────────────────────
+# ── Licence ─────────────────────────────────────────────────────────────────
 try:
     from check_license import is_license_valid
     if not is_license_valid():
-        print(
-            "\n✗ Licence invalide ou expirée.\n"
-            "  Vérifiez le fichier python.txt dans le répertoire du projet.\n",
-            file=sys.stderr,
-        )
+        print("\n✗ Licence invalide ou expirée.\n", file=sys.stderr)
         sys.exit(1)
-except Exception as _lic_err:
-    # En cas d'erreur inattendue dans le module licence, on ne bloque pas le démarrage
-    print(f"[WARN] Vérification de licence ignorée : {_lic_err}", file=sys.stderr)
+except Exception as _e:
+    print(f"[WARN] Licence ignorée : {_e}", file=sys.stderr)
 
-# ── Vérification Playwright installé ──────────────────────────────────────────
+# ── Playwright ───────────────────────────────────────────────────────────────
 try:
-    from playwright.sync_api import sync_playwright  # noqa: F401
+    from playwright.sync_api import sync_playwright  # noqa
 except ImportError:
-    print(
-        "\n✗ Playwright n'est pas installé.\n"
-        "  Exécutez d'abord : python install.py\n"
-        "  Ou manuellement : pip install playwright && playwright install chromium\n",
-        file=__import__("sys").stderr,
-    )
-    __import__("sys").exit(1)
-# ──────────────────────────────────────────────────────────────────────────────
+    print("\n✗ Playwright non installé. Lancez : python install.py\n", file=sys.stderr)
+    sys.exit(1)
 
 from libs.playwright_engine import PlaywrightEngine
 from libs.selector_registry import SelectorRegistry
-from libs.session_manager import SessionManager
+from libs.robot_manager import RobotManager
 from libs.scraper import Scraper
-from libs.config_manager import CONFIG_DIR, load_json
+from libs.config_manager import CONFIG_DIR
+from libs.database import get_database
 from libs.log_emitter import emit, write_pid, clear_pid
 from libs.error_handlers import setup_graceful_shutdown
-from libs.timing_humanizer import (
-    check_session_limit, check_cooldown, update_session_run_stats
-)
 from libs.config_validator import validate_session_config, ConfigError
 
 
-# ──────────────────────────────────────────────
-# Parseur d'arguments
-# ──────────────────────────────────────────────
+# ── Bootstrap DB (import JSON → SQL, idempotent) ─────────────────────────────
+def _bootstrap():
+    db = get_database()
+    for path, fn in [
+        (pathlib.Path("data/campaigns/campaigns.json"), db.import_campaigns_from_json),
+        (pathlib.Path("data/groups/groups.json"),       db.import_groups_from_json),
+    ]:
+        if path.exists():
+            fn(path)
 
+
+# ── Parseur ───────────────────────────────────────────────────────────────────
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="BON — Facebook Groups Publisher (autonome)"
-    )
-    sub = parser.add_subparsers(dest="command")
+    p = argparse.ArgumentParser(description="BON v9 — Facebook Groups Publisher")
+    sub = p.add_subparsers(dest="command")
+
+    # robot
+    r = sub.add_parser("robot", help="Gestion des robots")
+    rsub = r.add_subparsers(dest="robot_cmd")
+    rc = rsub.add_parser("create"); rc.add_argument("--robot", required=True); rc.add_argument("--account")
+    rsub.add_parser("list")
+    rv = rsub.add_parser("verify"); rv.add_argument("--robot", required=True)
+    rd = rsub.add_parser("delete"); rd.add_argument("--robot", required=True)
 
     # post
-    p = sub.add_parser("post", help="Publier dans les groupes (1 image)")
-    p.add_argument("--session", required=True, help="Nom de la session/compte")
-    p.add_argument("--headless", action="store_true", help="Mode sans fenêtre")
-
-    # post-multi
-    p = sub.add_parser("post-multi", help="Publier avec plusieurs images")
-    p.add_argument("--session", required=True)
-    p.add_argument("--headless", action="store_true")
-
-    # marketplace
-    p = sub.add_parser("marketplace", help="Publier dans Facebook Marketplace")
-    p.add_argument("--session", required=True)
-    p.add_argument("--headless", action="store_true")
+    pp = sub.add_parser("post"); pp.add_argument("--robot", required=True); pp.add_argument("--headless", action="store_true")
 
     # save-groups
-    p = sub.add_parser("save-groups", help="Rechercher et sauvegarder des groupes")
-    p.add_argument("--session", required=True)
-    p.add_argument("--keyword", required=True, help="Mot-clé de recherche")
-    p.add_argument("--headless", action="store_true")
+    sg = sub.add_parser("save-groups"); sg.add_argument("--robot", required=True); sg.add_argument("--keyword", required=True); sg.add_argument("--headless", action="store_true")
 
-    # login
-    p = sub.add_parser("login", help="Créer une session via login manuel")
-    p.add_argument("--session", required=True, help="Nom à donner au compte")
+    # comment
+    co = sub.add_parser("comment"); co.add_argument("--robot", required=True); co.add_argument("--urls", required=True); co.add_argument("--max", type=int, default=3)
 
-    # list-sessions
-    sub.add_parser("list-sessions", help="Lister les sessions disponibles")
+    # dm
+    dm = sub.add_parser("dm"); dm.add_argument("--robot", required=True); dm.add_argument("--target", required=True); dm.add_argument("--text", required=True); dm.add_argument("--media", nargs="*")
 
-    # verify
-    p = sub.add_parser("verify", help="Vérifier l'état d'une session")
-    p.add_argument("--session", required=True)
+    # dm-queue
+    dq = sub.add_parser("dm-queue"); dq.add_argument("--robot", required=True); dq.add_argument("--limit", type=int, default=10)
 
-    return parser.parse_args()
+    # migrate
+    mg = sub.add_parser("migrate"); mg.add_argument("--sessions", action="store_true"); mg.add_argument("--data", action="store_true")
+
+    # dashboard
+    sub.add_parser("dashboard")
+
+    return p.parse_args()
 
 
-# ──────────────────────────────────────────────
-# Helpers partagés
-# ──────────────────────────────────────────────
-
-def _load_and_validate_session(session_name: str) -> tuple:
-    """
-    Charge et valide la config d'une session.
-    Returns: (session_manager, session_config)
-    Exits avec code 1 si invalide.
-    """
-    sm = SessionManager()
-
-    if not sm.session_exists(session_name):
-        emit("ERROR", "SESSION_NOT_FOUND", session=session_name)
-        emit("INFO", "HINT",
-             msg=f"Créez la session avec : python -m bon login --session {session_name}")
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _load_robot(robot_name: str):
+    rm = RobotManager()
+    if not rm.robot_exists(robot_name):
+        emit("ERROR", "ROBOT_NOT_FOUND", robot=robot_name)
+        print(f"\n✗ Robot '{robot_name}' introuvable.")
+        print(f"  Créez-le : python -m bon robot create --robot {robot_name}")
         sys.exit(1)
-
-    config = sm.get_config(session_name)
-
-    # Avertir si la session semble expirée (storage_state absent)
+    config = rm.get_config(robot_name)
     storage = config.get("storage_state", "")
     if storage and not pathlib.Path(storage).exists():
-        emit("WARN", "SESSION_STATE_MISSING",
-             session=session_name,
-             hint=f"Relancez : python -m bon login --session {session_name}")
-
-    try:
-        warnings = validate_session_config(config, session_name)
-        if warnings:
-            emit("WARN", "CONFIG_WARNINGS", count=len(warnings))
-    except ConfigError as e:
-        print(f"\n✗ {e}")
-        sys.exit(1)
-
-    return sm, config
+        emit("WARN", "STORAGE_STATE_MISSING", robot=robot_name)
+    return rm, config
 
 
-def _check_frequency_limits(config: dict, session_name: str) -> None:
-    """
-    Vérifie les limites de fréquence (cooldown + runs/jour).
-    Exits avec code 0 si limite atteinte (normal, pas une erreur).
-
-    CORRECTION : remet run_count_today à 0 si last_run_date != aujourd'hui
-    pour éviter un blocage injuste au lendemain.
-    """
-    from datetime import date
-    today = date.today().isoformat()
-
-    # Si le dernier run était un autre jour → le compteur est périmé
-    if config.get("last_run_date", "") != today:
-        config["run_count_today"] = 0
-
-    # Cooldown entre runs
-    last_run = config.get("last_run_ts")
-    cooldown_s = int(config.get("cooldown_between_runs_s", 7200))
-    if not check_cooldown(last_run, cooldown_s):
-        emit("WARN", "COOLDOWN_ACTIVE_EXIT", session=session_name)
-        sys.exit(0)
-
-    # Limite journalière
-    run_count = int(config.get("run_count_today", 0))
-    max_runs  = int(config.get("max_runs_per_day", 3))
-    if not check_session_limit(run_count, max_runs):
-        emit("WARN", "DAILY_LIMIT_REACHED_EXIT", session=session_name)
+def _check_limits(robot_name: str):
+    db = get_database()
+    can_run, reason = db.check_run_limits(robot_name)
+    if not can_run:
+        emit("WARN", "RUN_LIMIT_EXIT", robot=robot_name, reason=reason)
         sys.exit(0)
 
 
-def _build_engine_and_scraper(args, config: dict, session_name: str):
-    """Crée et retourne (engine, selectors, scraper)."""
-    headless = getattr(args, "headless", False)
-
+def _build_scraper(args, config, robot_name):
+    headless       = getattr(args, "headless", False)
     selectors_path = CONFIG_DIR / "selectors.json"
     if not selectors_path.exists():
         selectors_path = pathlib.Path("config") / "selectors.json"
-
     selectors = SelectorRegistry(selectors_path)
-    selectors.update_from_cdn()  # silencieux si CDN non configuré
+    selectors.update_from_cdn()
+    engine  = PlaywrightEngine(
+        headless    = headless,
+        locale      = config.get("locale", "fr-FR"),
+        timezone_id = config.get("timezone_id", "Europe/Paris"),
+    )
+    scraper = Scraper(engine, selectors, config, robot_name)
+    return engine, scraper
 
-    engine = PlaywrightEngine(headless=headless)
-    scraper = Scraper(engine, selectors, config, session_name)
-    return engine, selectors, scraper
+
+# ── Commandes ─────────────────────────────────────────────────────────────────
+def cmd_robot_create(args):
+    rm = RobotManager()
+    account = getattr(args, "account", None) or args.robot
+    engine  = PlaywrightEngine(headless=False)
+    engine.start()
+    try:
+        ok = rm.create_robot(args.robot, engine.browser, account_name=account)
+        if ok:
+            print(f"\n✓ Robot '{args.robot}' créé (compte : {account})")
+        else:
+            print(f"\n✗ Création échouée pour '{args.robot}'")
+            sys.exit(1)
+    finally:
+        engine.stop()
 
 
-# ──────────────────────────────────────────────
-# Commandes
-# ──────────────────────────────────────────────
+def cmd_robot_list():
+    robots = RobotManager().list_robots()
+    if robots:
+        print(f"Robots disponibles ({len(robots)}) :")
+        for r in robots:
+            robot_data = get_database().get_robot(r)
+            status = robot_data.get("status", "?") if robot_data else "?"
+            print(f"  • {r}  (compte: {robot_data.get('account_name','?')}, santé: {robot_data.get('health_score','?')}/100)")
+    else:
+        print("Aucun robot configuré.\nCréez-en un : python -m bon robot create --robot robot1")
 
-def run_post(args, multi_image: bool = False) -> None:
-    """Publie dans les groupes (simple ou multi-images)."""
-    sm, config = _load_and_validate_session(args.session)
-    _check_frequency_limits(config, args.session)
 
-    engine, _, scraper = _build_engine_and_scraper(args, config, args.session)
+def cmd_robot_verify(args):
+    rm, config = _load_robot(args.robot)
+    engine = PlaywrightEngine(headless=True)
+    engine.start()
+    try:
+        ctx, page = engine.new_context(storage_state=config.get("storage_state", ""))
+        page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=20000)
+        if "/login" in page.url:
+            print(f"✗ Robot '{args.robot}' : session expirée.")
+            sys.exit(1)
+        print(f"✓ Robot '{args.robot}' : session valide.")
+        ctx.close()
+    finally:
+        engine.stop()
+
+
+def cmd_robot_delete(args):
+    ok = RobotManager().delete_robot(args.robot)
+    print(f"{'✓' if ok else '✗'} Robot '{args.robot}' {'supprimé' if ok else 'erreur suppression'}")
+
+
+def cmd_post(args):
+    rm, config = _load_robot(args.robot)
+    _check_limits(args.robot)
+    engine, scraper = _build_scraper(args, config, args.robot)
+    db = get_database()
 
     def cleanup():
-        try:
-            scraper.close()
-            engine.stop()
-        except Exception:
-            pass
+        try: scraper.close(); engine.stop()
+        except Exception: pass
         clear_pid()
 
-    engine.start()
-    write_pid()
+    engine.start(); write_pid()
     setup_graceful_shutdown(cleanup)
-
     try:
         with scraper:
-            if multi_image:
-                stats = scraper.post_in_groups_multi()
-            else:
-                stats = scraper.post_in_groups()
-
-            emit("SUCCESS", "RUN_COMPLETE", session=args.session, **stats)
-
-            # Mettre à jour les stats de fréquence et sauvegarder
-            updated_config = update_session_run_stats(config)
-            sm.save_config(args.session, updated_config)
-
+            stats = scraper.post_in_groups()
+            emit("SUCCESS", "RUN_COMPLETE", robot=args.robot, **stats)
+            db.record_run(args.robot)
     except KeyboardInterrupt:
         emit("INFO", "INTERRUPTED_BY_USER")
     except Exception as e:
-        emit("ERROR", "RUN_FAILED", session=args.session, error=str(e))
+        emit("ERROR", "RUN_FAILED", robot=args.robot, error=str(e))
         sys.exit(1)
     finally:
-        engine.stop()
-        clear_pid()
+        engine.stop(); clear_pid()
 
 
-def run_marketplace(args) -> None:
-    """Publie une annonce dans Marketplace."""
-    sm, config = _load_and_validate_session(args.session)
-
-    if not config.get("marketplace"):
-        emit("ERROR", "MARKETPLACE_NOT_CONFIGURED", session=args.session,
-             hint="Ajoutez la clé 'marketplace' dans la config session")
-        sys.exit(1)
-
-    # CORRECTION : appliquer les mêmes limites de fréquence que run_post
-    _check_frequency_limits(config, args.session)
-
-    engine, _, scraper = _build_engine_and_scraper(args, config, args.session)
-    engine.start()
-    write_pid()
-
-    def cleanup():
-        try:
-            scraper.close()
-            engine.stop()
-        except Exception:
-            pass
-        clear_pid()
-
-    setup_graceful_shutdown(cleanup)
-
-    try:
-        with scraper:
-            success = scraper.post_in_marketplace()
-            if success:
-                emit("SUCCESS", "MARKETPLACE_DONE", session=args.session)
-                # Mettre à jour les stats de fréquence
-                updated_config = update_session_run_stats(config)
-                sm.save_config(args.session, updated_config)
-            else:
-                emit("WARN", "MARKETPLACE_SKIPPED", session=args.session)
-    except KeyboardInterrupt:
-        emit("INFO", "INTERRUPTED_BY_USER")
-    except Exception as e:
-        emit("ERROR", "MARKETPLACE_FAILED", error=str(e))
-        sys.exit(1)
-    finally:
-        engine.stop()
-        clear_pid()
-
-
-def run_save_groups(args) -> None:
-    """Recherche et sauvegarde des groupes."""
-    sm, config = _load_and_validate_session(args.session)
-    engine, _, scraper = _build_engine_and_scraper(args, config, args.session)
-    engine.start()
-    write_pid()
-
+def cmd_save_groups(args):
+    rm, config = _load_robot(args.robot)
+    engine, scraper = _build_scraper(args, config, args.robot)
+    engine.start(); write_pid()
     try:
         with scraper:
             links = scraper.save_groups(args.keyword)
-            sm.save_config(args.session, scraper.config)
-            print(f"\n✓ {len(links)} groupes sauvegardés pour '{args.session}'")
-    except Exception as e:
-        emit("ERROR", "SAVE_GROUPS_FAILED", error=str(e))
-        sys.exit(1)
+            print(f"\n✓ {len(links)} groupes sauvegardés pour '{args.robot}'")
     finally:
-        engine.stop()
-        clear_pid()
+        engine.stop(); clear_pid()
 
 
-def run_login(args) -> None:
-    """
-    Crée une nouvelle session via login manuel dans le navigateur.
-    Délègue à SessionManager.create_session().
-    """
-    sm = SessionManager()
-    emit("INFO", "LOGIN_START", session=args.session)
-
-    engine = PlaywrightEngine(headless=False)
-    engine.start()
-
+def cmd_comment(args):
+    rm, config = _load_robot(args.robot)
+    engine, scraper = _build_scraper(args, config, args.robot)
+    engine.start(); write_pid()
     try:
-        # CORRECTION : utilise la propriété publique engine.browser
-        ok = sm.create_session(args.session, engine.browser)
-        if ok:
-            from libs.config_manager import get_session_state_path
-            state_path = get_session_state_path(args.session)
-            print(f"\n✓ Session '{args.session}' créée avec succès.")
-            print(f"  Fichier session : {state_path}")
-        else:
-            print(f"\n✗ Login non détecté pour '{args.session}'. Réessayez.")
-            sys.exit(1)
-    except Exception as e:
-        emit("ERROR", "LOGIN_ERROR", error=str(e))
-        print(f"\n✗ Erreur : {e}")
-        sys.exit(1)
+        with scraper:
+            urls  = [u.strip() for u in args.urls.split(",") if u.strip()]
+            count = scraper.social.browse_and_comment(urls, max_comments=args.max)
+            print(f"\n✓ {count} commentaire(s) publiés")
     finally:
-        engine.stop()
+        engine.stop(); clear_pid()
 
 
-def run_verify(args) -> None:
-    """Vérifie si une session est encore valide."""
-    sm = SessionManager()
-    if not sm.session_exists(args.session):
-        print(f"✗ Session '{args.session}' introuvable.")
-        sys.exit(1)
-
-    config = sm.get_config(args.session)
-    engine = PlaywrightEngine(headless=True)
-    engine.start()
-
+def cmd_dm(args):
+    rm, config = _load_robot(args.robot)
+    engine, scraper = _build_scraper(args, config, args.robot)
+    engine.start(); write_pid()
     try:
-        context, page = engine.new_context(
-            storage_state=config.get("storage_state", "")
-        )
-        page.goto("https://www.facebook.com/", wait_until="domcontentloaded",
-                  timeout=20000)
-
-        if "/login" in page.url:
-            print(f"✗ Session '{args.session}' expirée.")
-            emit("WARN", "SESSION_EXPIRED", session=args.session)
-            context.close()
-            sys.exit(1)
-
-        print(f"✓ Session '{args.session}' valide.")
-        emit("INFO", "SESSION_VALID", session=args.session)
-        context.close()
-    except Exception as e:
-        print(f"✗ Erreur de vérification : {e}")
-        sys.exit(1)
+        with scraper:
+            ok = scraper.social.send_dm(
+                target_profile_url = args.target,
+                text               = args.text,
+                media_paths        = getattr(args, "media", None),
+            )
+            print(f"\n{'✓' if ok else '✗'} DM {'envoyé' if ok else 'échoué'}")
     finally:
-        engine.stop()
+        engine.stop(); clear_pid()
 
 
-# ──────────────────────────────────────────────
-# Main + mode interactif
-# ──────────────────────────────────────────────
+def cmd_dm_queue(args):
+    rm, config = _load_robot(args.robot)
+    engine, scraper = _build_scraper(args, config, args.robot)
+    engine.start(); write_pid()
+    try:
+        with scraper:
+            count = scraper.social.process_dm_queue(limit=args.limit)
+            print(f"\n✓ {count} DM traités depuis la file")
+    finally:
+        engine.stop(); clear_pid()
 
+
+def cmd_migrate(args):
+    rm  = RobotManager()
+    db  = get_database()
+    all = not (args.sessions or args.data)
+    total = 0
+    if args.sessions or all:
+        n = rm.migrate_sessions_to_robots()
+        print(f"✓ {n} session(s) → robots")
+        total += n
+    if args.data or all:
+        c1 = db.import_campaigns_from_json(pathlib.Path("data/campaigns/campaigns.json"))
+        c2 = db.import_groups_from_json(pathlib.Path("data/groups/groups.json"))
+        print(f"✓ {c1} campagne(s), {c2} groupe(s) importés en SQL")
+        total += c1 + c2
+    print(f"\n✓ Migration v9 — {total} élément(s) traités")
+
+
+def cmd_dashboard():
+    stats = get_database().get_dashboard_stats()
+    print("\n" + "="*45)
+    print("  BON v9 — Dashboard")
+    print("="*45)
+    for k, v in stats.items():
+        label = k.replace("_", " ").capitalize()
+        print(f"  {label:<30} {v}")
+    print("="*45)
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    _bootstrap()
     args = parse_args()
 
-    if args.command is None:
-        _interactive_mode()
-        return
-
-    dispatch = {
-        "post":          lambda: run_post(args, multi_image=False),
-        "post-multi":    lambda: run_post(args, multi_image=True),
-        "marketplace":   lambda: run_marketplace(args),
-        "save-groups":   lambda: run_save_groups(args),
-        "login":         lambda: run_login(args),
-        "verify":        lambda: run_verify(args),
-        "list-sessions": lambda: _list_sessions(),
-    }
-
-    fn = dispatch.get(args.command)
-    if fn:
-        fn()
+    if args.command == "robot":
+        rc = getattr(args, "robot_cmd", None)
+        if rc == "create": cmd_robot_create(args)
+        elif rc == "list":   cmd_robot_list()
+        elif rc == "verify": cmd_robot_verify(args)
+        elif rc == "delete": cmd_robot_delete(args)
+        else: print("Usage: python -m bon robot [create|list|verify|delete] ...")
+    elif args.command == "post":          cmd_post(args)
+    elif args.command == "save-groups":   cmd_save_groups(args)
+    elif args.command == "comment":       cmd_comment(args)
+    elif args.command == "dm":            cmd_dm(args)
+    elif args.command == "dm-queue":      cmd_dm_queue(args)
+    elif args.command == "migrate":       cmd_migrate(args)
+    elif args.command == "dashboard":     cmd_dashboard()
+    elif args.command is None:            _interactive()
     else:
         print(f"Commande inconnue : {args.command}")
         sys.exit(1)
 
 
-def _list_sessions():
-    sessions = SessionManager().list_sessions()
-    if sessions:
-        print("Sessions disponibles :")
-        for s in sessions:
-            print(f"  • {s}")
-    else:
-        print("Aucune session configurée.")
-        print("Créez-en une : python -m bon login --session <nom>")
-
-
-def _interactive_mode():
-    """Mode interactif — pour lancer manuellement depuis un terminal."""
-    print("BON — Facebook Groups Publisher")
-    print("=" * 40)
-
-    sessions = SessionManager().list_sessions()
-    if not sessions:
-        print("Aucune session. Créez-en une :")
-        print("  python -m bon login --session <nom>")
+def _interactive():
+    print("BON v9 — Facebook Groups Publisher")
+    print("="*40)
+    robots = RobotManager().list_robots()
+    if not robots:
+        print("Aucun robot. Créez-en un :")
+        print("  python -m bon robot create --robot robot1")
         return
-
-    print("Sessions :", ", ".join(sessions))
-    session = input("Session à utiliser : ").strip()
-    if session not in sessions:
-        print("Session introuvable.")
+    print("Robots :", ", ".join(robots))
+    robot = input("Robot à utiliser : ").strip()
+    if robot not in robots:
+        print("Robot introuvable.")
         return
-
-    print("\n1) Publier dans les groupes (1 image)")
-    print("2) Publier multi-images")
-    print("3) Publier dans Marketplace")
-    print("4) Sauvegarder des groupes")
-    print("5) Quitter")
+    print("\n1) Publier dans les groupes")
+    print("2) Sauvegarder des groupes")
+    print("3) Dashboard")
+    print("4) Quitter")
     choice = input("Choix : ").strip()
-
-    ns = argparse.Namespace(session=session, headless=False)
-    if choice == "1":
-        run_post(ns, multi_image=False)
+    ns = argparse.Namespace(robot=robot, headless=False, command="post")
+    if choice == "1":   cmd_post(ns)
     elif choice == "2":
-        run_post(ns, multi_image=True)
-    elif choice == "3":
-        run_marketplace(ns)
-    elif choice == "4":
         keyword = input("Mot-clé : ").strip()
         ns.keyword = keyword
-        run_save_groups(ns)
+        cmd_save_groups(ns)
+    elif choice == "3": cmd_dashboard()
 
 
 if __name__ == "__main__":

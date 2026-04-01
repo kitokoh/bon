@@ -107,6 +107,7 @@ class PlaywrightEngine:
         self,
         storage_state: Optional[str] = None,
         viewport: dict = None,
+        proxy: Optional[dict] = None,
     ) -> tuple:
         """
         Crée un nouveau contexte navigateur (1 contexte = 1 compte).
@@ -114,6 +115,9 @@ class PlaywrightEngine:
         Args:
             storage_state: chemin vers le fichier de session Playwright
             viewport:      dict {"width": 1280, "height": 720}
+            proxy:         proxy spécifique à CE contexte, ex:
+                           {"server": "http://host:port", "username": "u", "password": "p"}
+                           Écrase le proxy global du browser pour ce contexte uniquement.
 
         Returns:
             (BrowserContext, Page)
@@ -127,6 +131,14 @@ class PlaywrightEngine:
             "locale":      self.locale,
             "timezone_id": self.timezone_id,
         }
+
+        # Proxy par contexte (priorité sur le proxy global du browser)
+        effective_proxy = proxy or self.proxy
+        if effective_proxy:
+            opts["proxy"] = effective_proxy
+            emit("INFO", "CONTEXT_WITH_PROXY",
+                 server=effective_proxy.get("server", "?"))
+
         if storage_state and pathlib.Path(storage_state).exists():
             opts["storage_state"] = storage_state
             emit("INFO", "CONTEXT_WITH_SESSION", state=storage_state)

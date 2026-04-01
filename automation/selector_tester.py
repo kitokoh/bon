@@ -73,7 +73,7 @@ def test_selector(url: str, selector: str, headless: bool = False, timeout: int 
                 
                 # Récupérer infos élément
                 tag = element.evaluate("el => el.tagName")
-                text = element.evaluate("el => el.innerText[:200]")
+                text = element.evaluate("el => el.innerText.substring(0, 200)")
                 aria_label = element.evaluate("el => el.getAttribute('aria-label')")
                 role = element.evaluate("el => el.getAttribute('role')")
                 

@@ -1,6 +1,11 @@
 """
 config_validator.py — Validation de la configuration de session au démarrage
 Vérifie les URLs de groupes, les chemins d'images, les paramètres obligatoires.
+
+CORRECTIONS v5 :
+  - Validation locale et timezone_id contre listes Playwright connues
+  - Validation proxy (format dict attendu)
+  - Validation max_groups_per_hour
 """
 import pathlib
 import re
@@ -16,6 +21,28 @@ except ImportError:
 FB_GROUP_RE = re.compile(
     r"^https?://(?:www\.)?facebook\.com/groups/[\w./-]+/?$"
 )
+
+# Locales valides Playwright (sous-ensemble courant — non exhaustif)
+VALID_LOCALES = {
+    "fr-FR", "fr-BE", "fr-CH", "fr-CA",
+    "en-US", "en-GB", "en-AU", "en-CA",
+    "ar-MA", "ar-SA", "ar-AE", "ar-DZ", "ar-TN",
+    "tr-TR", "de-DE", "es-ES", "es-MX", "pt-BR",
+    "it-IT", "nl-NL", "pl-PL", "ru-RU", "zh-CN",
+}
+
+# Timezones valides Playwright (IANA — sous-ensemble courant)
+VALID_TIMEZONES = {
+    "Europe/Paris", "Europe/Brussels", "Europe/Zurich",
+    "Europe/London", "Europe/Berlin", "Europe/Madrid",
+    "Europe/Rome", "Europe/Amsterdam", "Europe/Warsaw",
+    "Africa/Casablanca", "Africa/Algiers", "Africa/Tunis",
+    "Asia/Dubai", "Asia/Riyadh", "Asia/Istanbul",
+    "America/New_York", "America/Chicago", "America/Los_Angeles",
+    "America/Toronto", "America/Sao_Paulo",
+    "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney",
+    "UTC",
+}
 
 
 class ConfigError(Exception):
@@ -93,6 +120,12 @@ def validate_session_config(config: dict, session_name: str) -> list[str]:
     if not isinstance(max_groups, int) or max_groups < 1:
         warnings.append(f"max_groups_per_run invalide ({max_groups}) → forcé à 10")
 
+    max_per_hour = config.get("max_groups_per_hour", 5)
+    if not isinstance(max_per_hour, int) or not (1 <= max_per_hour <= 20):
+        warnings.append(
+            f"max_groups_per_hour invalide ({max_per_hour}) — doit être entre 1 et 20 → forcé à 5"
+        )
+
     delay = config.get("delay_between_groups", [60, 120])
     if not (isinstance(delay, list) and len(delay) == 2 and delay[0] <= delay[1]):
         warnings.append(f"delay_between_groups invalide ({delay}) → valeur défaut [60, 120]")
@@ -100,6 +133,46 @@ def validate_session_config(config: dict, session_name: str) -> list[str]:
     max_runs = config.get("max_runs_per_day", 2)
     if not isinstance(max_runs, int) or max_runs < 1:
         warnings.append(f"max_runs_per_day invalide ({max_runs}) → forcé à 2")
+
+    # ── Locale et timezone (valeurs Playwright connues) ──────
+    locale = config.get("locale", "fr-FR")
+    if locale not in VALID_LOCALES:
+        warnings.append(
+            f"locale '{locale}' non reconnue dans la liste Playwright validée. "
+            f"Le contexte pourrait planter silencieusement. "
+            f"Valeurs acceptées : {', '.join(sorted(VALID_LOCALES)[:8])}..."
+        )
+
+    timezone = config.get("timezone_id", "Europe/Paris")
+    if timezone not in VALID_TIMEZONES:
+        warnings.append(
+            f"timezone_id '{timezone}' non reconnue dans la liste Playwright validée. "
+            f"Le contexte pourrait planter silencieusement. "
+            f"Valeurs acceptées : {', '.join(sorted(VALID_TIMEZONES)[:8])}..."
+        )
+
+    # ── Proxy (format attendu) ───────────────────────────────
+    proxy = config.get("proxy")
+    if proxy is not None:
+        if not isinstance(proxy, dict):
+            errors.append(
+                f"proxy doit être un dict ou null, reçu : {type(proxy).__name__}. "
+                f"Format attendu : {{\"server\": \"http://host:port\", "
+                f"\"username\": \"u\", \"password\": \"p\"}}"
+            )
+        elif "server" not in proxy:
+            errors.append(
+                "proxy.server manquant. "
+                "Format attendu : {\"server\": \"http://host:port\"}"
+            )
+        else:
+            server = proxy["server"]
+            if not (server.startswith("http://") or server.startswith("https://")
+                    or server.startswith("socks5://")):
+                warnings.append(
+                    f"proxy.server '{server}' — protocole inhabituel. "
+                    f"Playwright accepte http://, https://, socks5://"
+                )
 
     # ── Émission des logs ────────────────────────────────────
     for w in warnings:
@@ -143,7 +216,19 @@ def validate_selectors(selectors_data: dict) -> list[str]:
             "Migrez vers le format v2 avec listes de fallback."
         )
 
+    # Vérifier que les sélecteurs de thème utilisent {theme_index} et non 'index'
+    theme_candidates = sel.get("theme", [])
+    if isinstance(theme_candidates, list):
+        legacy_theme = [s for s in theme_candidates if "index" in s and "{theme_index}" not in s]
+        if legacy_theme:
+            warnings.append(
+                f"{len(legacy_theme)} sélecteur(s) de thème utilisent l'ancien placeholder "
+                f"'index' (littéral) au lieu de '{{theme_index}}'. "
+                f"Migrez pour éviter les remplacements silencieusement incorrects."
+            )
+
     for w in warnings:
         emit("WARN", "SELECTORS_WARNING", msg=w)
 
     return warnings
+
