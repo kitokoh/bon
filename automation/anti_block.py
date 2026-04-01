@@ -1,318 +1,214 @@
 """
 automation/anti_block.py — Gestion des limitations anti-blocage
 
-Implémente les règles pour éviter le blocage Facebook:
-- Maximum 5 groupes par heure
-- Pause aléatoire 30–120 secondes entre les posts
-- Pause longue après 3 publications
-- Pas de même texte deux fois de suite
-- Pas de même image plus de 2 fois
+CORRECTIONS v4 :
+  - can_post_now() : vérifie la limite horaire (max_groups_per_hour)
+  - record_post(text, images) : méthode publique unifiée pour enregistrer un post
+  - can_use_image(path) : vérifie que l'image n'est pas sur-utilisée (max 2×)
+  - Singleton get_anti_block_manager() exposé (comme get_health_manager)
+  - Long pause après N publications
+  - Nettoyage automatique des données > 24h
 """
 
 import random
 import time
 import json
+import threading
 import pathlib
 from datetime import datetime, timedelta
-from typing import List, Optional, Set
+from typing import List, Optional
 
 
 class AntiBlockManager:
     """
     Gère les limitations anti-blocage Facebook.
-    
-    Règles implémentées:
-    - max_groups_per_hour: Maximum 5 groupes par heure
-    - delay_between_posts: Pause aléatoire 30-120 secondes
-    - long_pause_after: Pause longue après N publications
-    - no_duplicate_text: Pas de même texte deux fois de suite
-    - no_overused_image: Pas de même image plus de 2 fois
+
+    Règles implémentées :
+    - max_groups_per_hour : Maximum 5 groupes par heure
+    - delay_between_posts : Pause aléatoire 30–120 secondes (géré par timing_humanizer)
+    - long_pause_after    : Pause longue après N publications
+    - no_duplicate_text   : Pas de même texte deux fois de suite (géré dans Scraper._pick_post)
+    - no_overused_image   : Pas de même image plus de 2 fois par session
     """
-    
-    def __init__(self, config_file: str = "data/anti_block_state.json"):
-        self.config_file = pathlib.Path(config_file)
-        self.config_file.parent.mkdir(parents=True, exist_ok=True)
-        self.state = self._load()
-        
-        # Configuration par défaut
-        self.max_groups_per_hour = 5
-        self.delay_min_seconds = 30
-        self.delay_max_seconds = 120
-        self.long_pause_after_posts = 3
-        self.long_pause_min_minutes = 30
-        self.long_pause_max_minutes = 60
-        self.max_image_uses = 2
-    
-    def _load(self) -> dict:
-        """Charge l'état depuis le fichier."""
-        if self.config_file.exists():
+
+    def __init__(self, state_file: str = None):
+        if state_file is None:
             try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
+                from libs.config_manager import LOGS_DIR
+                state_file = str(LOGS_DIR / "anti_block_state.json")
+            except ImportError:
+                state_file = "logs/anti_block_state.json"
+
+        self.state_file = pathlib.Path(state_file)
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+
+        # Configuration
+        self.max_groups_per_hour      = 5
+        self.max_image_uses           = 2
+        self.long_pause_after_posts   = 3
+        self.long_pause_min_minutes   = 30
+        self.long_pause_max_minutes   = 60
+
+        self.state = self._load()
+
+    # ──────────────────────────────────────────
+    # Persistance
+    # ──────────────────────────────────────────
+
+    def _load(self) -> dict:
+        """Charge l'état depuis le fichier JSON."""
+        if self.state_file.exists():
+            try:
+                with open(self.state_file, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
                 pass
-        
-        return {
-            "posts_today": [],
-            "texts_used": [],
-            "images_used": {},
-            "last_post_time": None,
-            "long_pause_until": None,
-            "hourly_counts": {}
-        }
-    
-    def _save(self):
-        """Sauvegarde l'état."""
+        return self._empty_state()
+
+    def _save(self) -> None:
+        """Sauvegarde l'état sur disque."""
         self._cleanup_old_data()
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(self.state, f, indent=2, ensure_ascii=False)
-    
-    def _cleanup_old_data(self):
-        """Nettoie les données anciennes (> 24h)."""
-        now = datetime.now()
-        cutoff = now - timedelta(hours=24)
-        
-        # Nettoyer les posts d'aujourd'hui
-        if "posts_today" in self.state:
-            self.state["posts_today"] = [
-                p for p in self.state["posts_today"]
-                if datetime.fromisoformat(p["time"]) > cutoff
-            ]
-        
-        # Nettoyer les textes utilisés (garder seulement les 10 derniers)
-        if "texts_used" in self.state:
-            self.state["texts_used"] = self.state["texts_used"][-10:]
-        
-        # Nettoyer les counts horaires (> 2 heures)
-        if "hourly_counts" in self.state:
-            current_hour = now.strftime("%Y-%m-%d-%H")
-            self.state["hourly_counts"] = {
-                k: v for k, v in self.state["hourly_counts"].items()
-                if k >= current_hour
-            }
-    
-    def can_post(self) -> tuple[bool, str]:
-        """
-        Vérifie si on peut poster maintenant.
-        
-        Returns:
-            (can_post, reason)
-        """
-        now = datetime.now()
-        
-        # Vérifier pause longue
-        if self.state.get("long_pause_until"):
-            pause_until = datetime.fromisoformat(self.state["long_pause_until"])
-            if now < pause_until:
-                remaining = (pause_until - now).seconds // 60
-                return False, f"Pause longue en cours, attendez {remaining} minutes"
-            else:
-                self.state["long_pause_until"] = None
-        
-        # Vérifier limite horaire
-        current_hour = now.strftime("%Y-%m-%d-%H")
-        hourly_count = self.state.get("hourly_counts", {}).get(current_hour, 0)
-        if hourly_count >= self.max_groups_per_hour:
-            return False, f"Limite horaire atteinte ({hourly_count}/{self.max_groups_per_hour})"
-        
-        # Vérifier délai entre posts
-        if self.state.get("last_post_time"):
-            last_post = datetime.fromisoformat(self.state["last_post_time"])
-            elapsed = (now - last_post).seconds
-            min_delay = random.randint(self.delay_min_seconds, self.delay_max_seconds)
-            if elapsed < min_delay:
-                remaining = min_delay - elapsed
-                return False, f"Attendez {remaining} secondes avant le prochain post"
-        
-        return True, "OK"
-    
-    def record_post(self, group_url: str, text: str, images: List[str]):
-        """Enregistre un post effectué."""
-        now = datetime.now()
-        
-        # Ajouter aux posts d'aujourd'hui
-        post_record = {
-            "time": now.isoformat(),
-            "group": group_url,
-            "text_hash": hash(text) % 1000000,
-            "images": images
-        }
-        self.state.setdefault("posts_today", []).append(post_record)
-        
-        # Mettre à jour le dernier temps de post
-        self.state["last_post_time"] = now.isoformat()
-        
-        # Mettre à jour le compteur horaire
-        current_hour = now.strftime("%Y-%m-%d-%H")
-        hourly_counts = self.state.setdefault("hourly_counts", {})
-        hourly_counts[current_hour] = hourly_counts.get(current_hour, 0) + 1
-        
-        # Mettre à jour l'historique des textes
-        self.state.setdefault("texts_used", []).append(text)
-        if len(self.state["texts_used"]) > 10:
-            self.state["texts_used"] = self.state["texts_used"][-10:]
-        
-        # Mettre à jour le comptage des images
-        images_used = self.state.setdefault("images_used", {})
-        for img in images:
-            images_used[img] = images_used.get(img, 0) + 1
-        
-        # Vérifier si pause longue nécessaire
-        posts_count = len(self.state["posts_today"])
-        if posts_count > 0 and posts_count % self.long_pause_after_posts == 0:
-            pause_minutes = random.randint(
-                self.long_pause_min_minutes,
-                self.long_pause_max_minutes
-            )
-            self.state["long_pause_until"] = (
-                now + timedelta(minutes=pause_minutes)
-            ).isoformat()
-            print(f"[ANTI-BLOCK] Pause longue activée: {pause_minutes} minutes")
-        
-        self._save()
-    
-    def get_next_text(self, available_texts: List[str]) -> Optional[str]:
-        """
-        Sélectionne un texte qui n'a pas été utilisé récemment.
-        
-        Args:
-            available_texts: Liste des textes disponibles
-        
-        Returns:
-            Le texte sélectionné ou None si tous ont été utilisés
-        """
-        used_hashes = {hash(t) % 1000000 for t in self.state.get("texts_used", [])[-5:]}
-        
-        candidates = [
-            t for t in available_texts
-            if (hash(t) % 1000000) not in used_hashes
-        ]
-        
-        if not candidates:
-            # Fallback: prendre un texte au hasard si tous ont été utilisés
-            return random.choice(available_texts) if available_texts else None
-        
-        return random.choice(candidates)
-    
-    def get_valid_images(
-        self,
-        available_images: List[str],
-        max_images: int = 5
-    ) -> List[str]:
-        """
-        Sélectionne des images qui n'ont pas été trop utilisées.
-        
-        Args:
-            available_images: Liste des images disponibles
-            max_images: Nombre maximum d'images à retourner
-        
-        Returns:
-            Liste d'images valides
-        """
-        images_used = self.state.get("images_used", {})
-        
-        # Filtrer les images trop utilisées
-        valid = [
-            img for img in available_images
-            if images_used.get(img, 0) < self.max_image_uses
-        ]
-        
-        if not valid:
-            # Fallback: réinitialiser les compteurs si toutes les images sont épuisées
-            self.state["images_used"] = {}
-            valid = available_images
-        
-        # Sélectionner aléatoirement
-        selected = random.sample(valid, min(len(valid), max_images))
-        return selected
-    
-    def wait_if_needed(self) -> bool:
-        """
-        Attend si nécessaire selon les règles anti-blocage.
-        
-        Returns:
-            True si une attente a eu lieu, False sinon
-        """
-        can_post, reason = self.can_post()
-        
-        if can_post:
-            return False
-        
-        if "Pause longue" in reason:
-            # Pause longue: on ne fait rien, l'utilisateur doit attendre
-            print(f"[ANTI-BLOCK] {reason}")
-            return False
-        
-        if "Attendez" in reason:
-            # Délai normal: on attend automatiquement
-            seconds = int(reason.split()[1])
-            print(f"[ANTI-BLOCK] {reason}")
-            time.sleep(seconds)
-            return True
-        
-        return False
-    
-    def apply_random_delay(self, min_s: int = None, max_s: int = None):
-        """Applique un délai aléatoire humain."""
-        min_s = min_s or self.delay_min_seconds
-        max_s = max_s or self.delay_max_seconds
-        delay = random.uniform(min_s, max_s)
-        print(f"[ANTI-BLOCK] Pause de {delay:.1f} secondes...")
-        time.sleep(delay)
-    
-    def get_stats(self) -> dict:
-        """Retourne les statistiques actuelles."""
-        now = datetime.now()
-        current_hour = now.strftime("%Y-%m-%d-%H")
-        
+        try:
+            with open(self.state_file, "w", encoding="utf-8") as f:
+                json.dump(self.state, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass  # Ne pas crasher si le disque est plein
+
+    @staticmethod
+    def _empty_state() -> dict:
         return {
-            "posts_today": len(self.state.get("posts_today", [])),
-            "hourly_count": self.state.get("hourly_counts", {}).get(current_hour, 0),
-            "max_per_hour": self.max_groups_per_hour,
-            "last_post": self.state.get("last_post_time"),
-            "long_pause_until": self.state.get("long_pause_until"),
-            "unique_texts_used": len(set(self.state.get("texts_used", []))),
-            "unique_images_used": len(self.state.get("images_used", {}))
+            "posts_this_hour": [],   # [{"time": ISO, "text": ..., "images": [...]}]
+            "image_uses": {},        # {path: count}
+            "long_pause_until": None,
         }
-    
-    def reset_daily(self):
-        """Réinitialise les compteurs quotidiens."""
-        self.state["posts_today"] = []
-        self.state["texts_used"] = []
-        self.state["images_used"] = {}
-        self.state["long_pause_until"] = None
-        self._save()
+
+    def _cleanup_old_data(self) -> None:
+        """Supprime les entrées de plus d'une heure de posts_this_hour."""
+        cutoff = datetime.now() - timedelta(hours=1)
+        self.state["posts_this_hour"] = [
+            p for p in self.state.get("posts_this_hour", [])
+            if datetime.fromisoformat(p["time"]) > cutoff
+        ]
+
+    # ──────────────────────────────────────────
+    # API publique
+    # ──────────────────────────────────────────
+
+    def can_post_now(self) -> bool:
+        """
+        Retourne True si on peut poster maintenant (limite horaire non atteinte
+        et pas en pause longue).
+        """
+        with self._lock:
+            self._cleanup_old_data()
+
+            # Vérifier la pause longue
+            pause_until = self.state.get("long_pause_until")
+            if pause_until:
+                try:
+                    until_dt = datetime.fromisoformat(pause_until)
+                    if datetime.now() < until_dt:
+                        remaining = (until_dt - datetime.now()).total_seconds() / 60
+                        try:
+                            from libs.log_emitter import emit
+                            emit("WARN", "ANTI_BLOCK_LONG_PAUSE",
+                                 remaining_minutes=round(remaining, 1))
+                        except ImportError:
+                            pass
+                        return False
+                    else:
+                        self.state["long_pause_until"] = None
+                except (ValueError, TypeError):
+                    self.state["long_pause_until"] = None
+
+            # Vérifier la limite horaire
+            posts_count = len(self.state.get("posts_this_hour", []))
+            return posts_count < self.max_groups_per_hour
+
+    def can_use_image(self, image_path: str) -> bool:
+        """
+        Retourne True si l'image n'a pas encore atteint sa limite d'usages.
+        """
+        with self._lock:
+            uses = self.state.get("image_uses", {}).get(image_path, 0)
+            return uses < self.max_image_uses
+
+    def record_post(self, text: str = "", images: List[str] = None) -> None:
+        """
+        Enregistre un post publié :
+        - Incrémente le compteur horaire
+        - Incrémente l'usage de chaque image
+        - Déclenche une pause longue si seuil atteint
+        """
+        images = images or []
+        now = datetime.now()
+
+        with self._lock:
+            self._cleanup_old_data()
+
+            # Ajouter à la liste horaire
+            self.state.setdefault("posts_this_hour", []).append({
+                "time": now.isoformat(),
+                "text": text[:100],  # on ne stocke pas tout le texte
+                "images": [p[-40:] for p in images],  # chemin raccourci
+            })
+
+            # Incrémenter l'usage des images
+            image_uses = self.state.setdefault("image_uses", {})
+            for img in images:
+                image_uses[img] = image_uses.get(img, 0) + 1
+
+            # Pause longue si seuil atteint
+            total_this_hour = len(self.state["posts_this_hour"])
+            if total_this_hour > 0 and total_this_hour % self.long_pause_after_posts == 0:
+                pause_min = random.randint(
+                    self.long_pause_min_minutes,
+                    self.long_pause_max_minutes
+                )
+                until = now + timedelta(minutes=pause_min)
+                self.state["long_pause_until"] = until.isoformat()
+                try:
+                    from libs.log_emitter import emit
+                    emit("INFO", "ANTI_BLOCK_LONG_PAUSE_SCHEDULED",
+                         after_posts=total_this_hour,
+                         pause_minutes=pause_min,
+                         until=until.strftime("%H:%M"))
+                except ImportError:
+                    pass
+
+            self._save()
+
+    def reset_image_uses(self) -> None:
+        """Remet à zéro le compteur d'usage des images (par exemple au début d'une nouvelle journée)."""
+        with self._lock:
+            self.state["image_uses"] = {}
+            self._save()
+
+    def get_hourly_post_count(self) -> int:
+        """Retourne le nombre de posts effectués dans l'heure écoulée."""
+        with self._lock:
+            self._cleanup_old_data()
+            return len(self.state.get("posts_this_hour", []))
+
+    def get_image_use_count(self, image_path: str) -> int:
+        """Retourne le nombre de fois qu'une image a été utilisée."""
+        with self._lock:
+            return self.state.get("image_uses", {}).get(image_path, 0)
 
 
-# Instance globale
-_anti_block_manager = None
+# ──────────────────────────────────────────
+# Singleton thread-safe
+# ──────────────────────────────────────────
+
+_anti_block_manager: Optional[AntiBlockManager] = None
+_abm_lock = threading.Lock()
 
 
 def get_anti_block_manager() -> AntiBlockManager:
-    """Retourne l'instance globale."""
     global _anti_block_manager
     if _anti_block_manager is None:
-        _anti_block_manager = AntiBlockManager()
+        with _abm_lock:
+            if _anti_block_manager is None:
+                _anti_block_manager = AntiBlockManager()
     return _anti_block_manager
-
-
-if __name__ == "__main__":
-    # Demo
-    abm = AntiBlockManager()
-    
-    print("Statistiques initiales:")
-    print(json.dumps(abm.get_stats(), indent=2))
-    
-    print("\nSimulation de posts...")
-    for i in range(3):
-        can, reason = abm.can_post()
-        print(f"Post {i+1}: {reason}")
-        if can:
-            abm.record_post(
-                f"https://facebook.com/groups/test{i}/",
-                f"Texte de test {i}",
-                [f"image{i}.jpg"]
-            )
-    
-    print("\nStatistiques après simulation:")
-    print(json.dumps(abm.get_stats(), indent=2))

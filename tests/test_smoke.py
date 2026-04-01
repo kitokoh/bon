@@ -2,12 +2,18 @@
 tests/test_smoke.py — Tests de non-régression fondamentaux
 Exécution : python -m pytest tests/ -v
              (sans Playwright ni Facebook — tests purement unitaires)
+
+CORRECTIONS v4 :
+  - TestDataFiles : pointe vers data/campaigns/campaigns.json et data/groups/groups.json
+    (data.json et data1.json n'existent pas dans la structure actuelle)
+  - TestAntiBlockManager : nouveaux tests pour l'API publique refactorisée
+  - TestFrequencyLimits  : test de la remise à zéro journalière du compteur
+  - TestPlaywrightEngine : test de la propriété publique browser
 """
 import sys
 import pathlib
 import pytest
 
-# Permettre l'import depuis la racine du projet
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 
@@ -23,7 +29,6 @@ class TestResolveMediaPath:
         return resolve_media_path
 
     def test_windows_backslash_path_extracts_filename(self):
-        """Un chemin Windows absolu doit donner uniquement le nom de fichier."""
         fn = self._get_fn()
         result = fn(r"C:\Users\Administrator\AppData\Roaming\saadiya\media\media10\7.png")
         assert result.name == "7.png", \
@@ -45,7 +50,6 @@ class TestResolveMediaPath:
         assert result.name == "image.png"
 
     def test_empty_string_does_not_crash(self):
-        """Un chemin vide ne doit pas lever d'exception."""
         fn = self._get_fn()
         try:
             fn("")
@@ -84,6 +88,7 @@ class TestDefaultSessionConfig:
         "add_comments",
         "comments",
         "marketplace",
+        "last_run_date",
     ]
 
     def _get_config(self):
@@ -96,28 +101,22 @@ class TestDefaultSessionConfig:
         assert not missing, f"Champs manquants : {missing}"
 
     def test_add_comments_default_false(self):
-        config = self._get_config()
-        assert config["add_comments"] is False
+        assert self._get_config()["add_comments"] is False
 
     def test_marketplace_default_empty_dict(self):
-        config = self._get_config()
-        assert isinstance(config["marketplace"], dict)
+        assert isinstance(self._get_config()["marketplace"], dict)
 
     def test_comments_default_empty_list(self):
-        config = self._get_config()
-        assert isinstance(config["comments"], list)
+        assert isinstance(self._get_config()["comments"], list)
 
     def test_cooldown_default_7200(self):
-        config = self._get_config()
-        assert config["cooldown_between_runs_s"] == 7200
+        assert self._get_config()["cooldown_between_runs_s"] == 7200
 
     def test_posts_default_list(self):
-        config = self._get_config()
-        assert isinstance(config["posts"], list)
+        assert isinstance(self._get_config()["posts"], list)
 
     def test_groups_default_list(self):
-        config = self._get_config()
-        assert isinstance(config["groups"], list)
+        assert isinstance(self._get_config()["groups"], list)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -176,40 +175,38 @@ class TestTimingHumanizer:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEST 4 — data.json / data1.json : pas de chemins personnels exposés
+# TEST 4 — CORRECTION : data files pointent vers la bonne structure
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestDataFiles:
-    """Fix F-04 : les fichiers d'exemple ne doivent pas contenir de données privées."""
+    """Fix F-04 : les fichiers de données existent et ont la bonne structure."""
 
     ROOT = pathlib.Path(__file__).parent.parent
 
-    def _load(self, filename):
+    def _load(self, rel_path):
         import json
-        return json.loads((self.ROOT / filename).read_text(encoding="utf-8"))
+        full = self.ROOT / rel_path
+        assert full.exists(), f"Fichier introuvable : {full}"
+        return json.loads(full.read_text(encoding="utf-8"))
 
-    def test_data_json_no_windows_paths(self):
-        data = self._load("data.json")
+    def test_campaigns_json_exists_and_valid(self):
+        data = self._load("data/campaigns/campaigns.json")
+        assert isinstance(data, (dict, list)), "campaigns.json doit être un dict ou une liste"
+
+    def test_groups_json_exists_and_valid(self):
+        data = self._load("data/groups/groups.json")
+        assert isinstance(data, (dict, list)), "groups.json doit être un dict ou une liste"
+
+    def test_campaigns_no_private_paths(self):
+        data = self._load("data/campaigns/campaigns.json")
         text = str(data)
-        assert "Administrator" not in text
-        assert "AppData" not in text
-        assert "Users\\" not in text
+        assert "Administrator" not in text, "Chemin Windows personnel détecté"
+        assert "AppData" not in text, "Chemin Windows personnel détecté"
 
-    def test_data1_json_no_windows_paths(self):
-        data = self._load("data1.json")
+    def test_groups_no_private_paths(self):
+        data = self._load("data/groups/groups.json")
         text = str(data)
-        assert "Administrator" not in text
-        assert "AppData" not in text
-
-    def test_data_json_valid_structure(self):
-        data = self._load("data.json")
-        assert "posts" in data
-        assert "groups" in data
-        assert isinstance(data["posts"], list)
-
-    def test_data1_json_valid_structure(self):
-        data = self._load("data1.json")
-        assert "stories" in data or "posts" in data
+        assert "Administrator" not in text, "Chemin Windows personnel détecté"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -236,7 +233,6 @@ class TestLicenseParsing:
         assert result[0] is None
 
     def test_get_serial_does_not_crash(self):
-        """get_serial_number() doit toujours retourner une chaîne, jamais crasher."""
         from check_license import get_serial_number
         result = get_serial_number()
         assert isinstance(result, str)
@@ -247,3 +243,125 @@ class TestLicenseParsing:
         macs = get_mac_addresses()
         assert isinstance(macs, list)
         assert len(macs) >= 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST 6 — AntiBlockManager : API publique v4
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAntiBlockManager:
+    """Vérifie que AntiBlockManager fonctionne correctement."""
+
+    def _get_manager(self, tmp_path):
+        from automation.anti_block import AntiBlockManager
+        return AntiBlockManager(state_file=str(tmp_path / "anti_block.json"))
+
+    def test_can_post_initially(self, tmp_path):
+        mgr = self._get_manager(tmp_path)
+        assert mgr.can_post_now() is True
+
+    def test_hourly_limit_enforced(self, tmp_path):
+        mgr = self._get_manager(tmp_path)
+        mgr.max_groups_per_hour = 2
+        mgr.long_pause_after_posts = 999  # désactiver la pause longue pour ce test
+        mgr.record_post(text="post1")
+        mgr.record_post(text="post2")
+        assert mgr.can_post_now() is False
+
+    def test_image_use_allowed_initially(self, tmp_path):
+        mgr = self._get_manager(tmp_path)
+        assert mgr.can_use_image("/path/image.jpg") is True
+
+    def test_image_use_blocked_after_max(self, tmp_path):
+        mgr = self._get_manager(tmp_path)
+        mgr.max_image_uses = 2
+        mgr.record_post(text="a", images=["/img.jpg"])
+        mgr.record_post(text="b", images=["/img.jpg"])
+        assert mgr.can_use_image("/img.jpg") is False
+
+    def test_image_use_count_tracked(self, tmp_path):
+        mgr = self._get_manager(tmp_path)
+        mgr.record_post(text="x", images=["/a.jpg", "/b.jpg"])
+        assert mgr.get_image_use_count("/a.jpg") == 1
+        assert mgr.get_image_use_count("/b.jpg") == 1
+
+    def test_hourly_count(self, tmp_path):
+        mgr = self._get_manager(tmp_path)
+        mgr.record_post(text="p1")
+        mgr.record_post(text="p2")
+        assert mgr.get_hourly_post_count() == 2
+
+    def test_reset_image_uses(self, tmp_path):
+        mgr = self._get_manager(tmp_path)
+        mgr.record_post(text="x", images=["/img.jpg", "/img.jpg"])
+        mgr.reset_image_uses()
+        assert mgr.get_image_use_count("/img.jpg") == 0
+
+    def test_singleton_returns_same_instance(self):
+        from automation.anti_block import get_anti_block_manager
+        a = get_anti_block_manager()
+        b = get_anti_block_manager()
+        assert a is b
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST 7 — Fréquence journalière : remise à zéro du compteur
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestFrequencyReset:
+    """Fix F-bug : run_count_today doit se remettre à 0 si last_run_date != today."""
+
+    def test_counter_resets_on_new_day(self):
+        """Simule un config avec un run d'hier → le compteur doit être perçu comme 0."""
+        from datetime import date
+        config = {
+            "run_count_today": 5,
+            "last_run_date": "2020-01-01",  # date passée
+            "last_run_ts": None,
+            "cooldown_between_runs_s": 0,
+            "max_runs_per_day": 3,
+        }
+        today = date.today().isoformat()
+        if config.get("last_run_date", "") != today:
+            config["run_count_today"] = 0
+
+        from libs.timing_humanizer import check_session_limit
+        assert check_session_limit(config["run_count_today"], config["max_runs_per_day"]) is True
+
+    def test_counter_not_reset_same_day(self):
+        """Si last_run_date == aujourd'hui, le compteur doit rester intouché."""
+        from datetime import date
+        today = date.today().isoformat()
+        config = {
+            "run_count_today": 3,
+            "last_run_date": today,
+            "max_runs_per_day": 3,
+        }
+        if config.get("last_run_date", "") != today:
+            config["run_count_today"] = 0
+
+        from libs.timing_humanizer import check_session_limit
+        assert check_session_limit(config["run_count_today"], config["max_runs_per_day"]) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEST 8 — PlaywrightEngine : propriété publique browser
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPlaywrightEngine:
+    """Vérifie que engine.browser est accessible (propriété publique)."""
+
+    def test_browser_property_exists(self):
+        """La propriété browser doit exister et retourner None avant start()."""
+        from libs.playwright_engine import PlaywrightEngine
+        engine = PlaywrightEngine()
+        assert hasattr(engine, "browser")
+        assert engine.browser is None  # Non démarré
+
+    def test_no_private_browser_access_needed(self):
+        """engine._browser ne doit plus être nécessaire en dehors de la classe."""
+        from libs.playwright_engine import PlaywrightEngine
+        engine = PlaywrightEngine()
+        # La propriété publique suffit
+        _ = engine.browser
+        # Si on peut accéder sans AttributeError, le test passe

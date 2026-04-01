@@ -1,6 +1,11 @@
 """
 playwright_engine.py — Moteur Playwright (remplace Selenium / automate.py)
 Interface propre, cross-platform, sans taskkill ni WMIC.
+
+CORRECTIONS v4 :
+  - Propriété publique `browser` (was _browser, accès privé depuis __main__)
+  - locale et timezone_id configurables (plus hardcodés fr-FR / Paris)
+  - Defaults cross-region conservés pour rétrocompatibilité
 """
 import pathlib
 import sys
@@ -28,7 +33,7 @@ class PlaywrightEngine:
     """
     Moteur navigateur Playwright.
     Gère le cycle de vie du browser, des contexts et des pages.
-    
+
     Usage :
         engine = PlaywrightEngine(headless=False)
         engine.start()
@@ -42,22 +47,33 @@ class PlaywrightEngine:
         headless: bool = False,
         proxy: Optional[dict] = None,
         slow_mo: int = 50,
+        locale: str = "fr-FR",
+        timezone_id: str = "Europe/Paris",
     ):
         """
         Args:
-            headless: True = mode invisible, False = fenêtre visible
-            proxy: dict Playwright proxy, ex: {"server": "http://host:port",
-                                               "username": "u", "password": "p"}
-            slow_mo: délai en ms entre chaque action Playwright (simule vitesse humaine)
+            headless:     True = mode invisible, False = fenêtre visible
+            proxy:        dict Playwright proxy, ex: {"server": "http://host:port"}
+            slow_mo:      délai en ms entre chaque action Playwright
+            locale:       locale navigateur (ex: "ar-MA", "tr-TR", "en-US")
+            timezone_id:  fuseau horaire (ex: "Africa/Casablanca", "Europe/Istanbul")
         """
         if not PLAYWRIGHT_AVAILABLE:
             raise RuntimeError("Playwright n'est pas installé. Exécutez : playwright install chromium")
 
-        self.headless = headless
-        self.proxy = proxy
-        self.slow_mo = slow_mo
+        self.headless    = headless
+        self.proxy       = proxy
+        self.slow_mo     = slow_mo
+        self.locale      = locale
+        self.timezone_id = timezone_id
         self._playwright = None
         self._browser: Optional[Browser] = None
+
+    # ── Propriété publique browser ──────────────────────────────────────────
+    @property
+    def browser(self) -> Optional[Browser]:
+        """Retourne l'instance Browser (lecture seule)."""
+        return self._browser
 
     def start(self) -> None:
         """Démarre le navigateur Playwright."""
@@ -66,7 +82,7 @@ class PlaywrightEngine:
         self._playwright = sync_playwright().start()
         launch_opts = {
             "headless": self.headless,
-            "slow_mo": self.slow_mo,
+            "slow_mo":  self.slow_mo,
         }
         if self.proxy:
             launch_opts["proxy"] = self.proxy
@@ -97,7 +113,7 @@ class PlaywrightEngine:
 
         Args:
             storage_state: chemin vers le fichier de session Playwright
-            viewport: dict {"width": 1280, "height": 720}
+            viewport:      dict {"width": 1280, "height": 720}
 
         Returns:
             (BrowserContext, Page)
@@ -107,9 +123,9 @@ class PlaywrightEngine:
 
         viewport = viewport or {"width": 1280, "height": 720}
         opts = {
-            "viewport": viewport,
-            "locale": "fr-FR",
-            "timezone_id": "Europe/Paris",
+            "viewport":    viewport,
+            "locale":      self.locale,
+            "timezone_id": self.timezone_id,
         }
         if storage_state and pathlib.Path(storage_state).exists():
             opts["storage_state"] = storage_state
@@ -118,12 +134,7 @@ class PlaywrightEngine:
             emit("INFO", "CONTEXT_NEW_ANONYMOUS")
 
         context = self._browser.new_context(**opts)
-
-        # Bloquer les ressources inutiles (images, fonts) pour aller plus vite
-        # Commenté par défaut car Facebook en a besoin pour certaines interactions
-        # context.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2}", lambda route: route.abort())
-
-        page = context.new_page()
+        page    = context.new_page()
         return context, page
 
     def screenshot_on_error(self, page: Page, error_name: str) -> Optional[str]:
@@ -140,7 +151,7 @@ class PlaywrightEngine:
     def navigate(self, page: Page, url: str, wait_until: str = "domcontentloaded") -> bool:
         """
         Navigue vers une URL de façon sécurisée.
-        
+
         Returns:
             True si navigation réussie, False sinon
         """

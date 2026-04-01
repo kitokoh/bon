@@ -16,6 +16,20 @@ import sys
 import argparse
 import pathlib
 
+# ── Vérification licence ───────────────────────────────────────────────────────
+try:
+    from check_license import is_license_valid
+    if not is_license_valid():
+        print(
+            "\n✗ Licence invalide ou expirée.\n"
+            "  Vérifiez le fichier python.txt dans le répertoire du projet.\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+except Exception as _lic_err:
+    # En cas d'erreur inattendue dans le module licence, on ne bloque pas le démarrage
+    print(f"[WARN] Vérification de licence ignorée : {_lic_err}", file=sys.stderr)
+
 # ── Vérification Playwright installé ──────────────────────────────────────────
 try:
     from playwright.sync_api import sync_playwright  # noqa: F401
@@ -95,7 +109,7 @@ def _load_and_validate_session(session_name: str) -> tuple:
     """
     Charge et valide la config d'une session.
     Returns: (session_manager, session_config)
-    Exits with code 1 si invalide.
+    Exits avec code 1 si invalide.
     """
     sm = SessionManager()
 
@@ -129,7 +143,17 @@ def _check_frequency_limits(config: dict, session_name: str) -> None:
     """
     Vérifie les limites de fréquence (cooldown + runs/jour).
     Exits avec code 0 si limite atteinte (normal, pas une erreur).
+
+    CORRECTION : remet run_count_today à 0 si last_run_date != aujourd'hui
+    pour éviter un blocage injuste au lendemain.
     """
+    from datetime import date
+    today = date.today().isoformat()
+
+    # Si le dernier run était un autre jour → le compteur est périmé
+    if config.get("last_run_date", "") != today:
+        config["run_count_today"] = 0
+
     # Cooldown entre runs
     last_run = config.get("last_run_ts")
     cooldown_s = int(config.get("cooldown_between_runs_s", 7200))
@@ -145,7 +169,7 @@ def _check_frequency_limits(config: dict, session_name: str) -> None:
         sys.exit(0)
 
 
-def _build_engine_and_scraper(args, config: str, session_name: str):
+def _build_engine_and_scraper(args, config: dict, session_name: str):
     """Crée et retourne (engine, selectors, scraper)."""
     headless = getattr(args, "headless", False)
 
@@ -216,17 +240,35 @@ def run_marketplace(args) -> None:
              hint="Ajoutez la clé 'marketplace' dans la config session")
         sys.exit(1)
 
+    # CORRECTION : appliquer les mêmes limites de fréquence que run_post
+    _check_frequency_limits(config, args.session)
+
     engine, _, scraper = _build_engine_and_scraper(args, config, args.session)
     engine.start()
     write_pid()
+
+    def cleanup():
+        try:
+            scraper.close()
+            engine.stop()
+        except Exception:
+            pass
+        clear_pid()
+
+    setup_graceful_shutdown(cleanup)
 
     try:
         with scraper:
             success = scraper.post_in_marketplace()
             if success:
                 emit("SUCCESS", "MARKETPLACE_DONE", session=args.session)
+                # Mettre à jour les stats de fréquence
+                updated_config = update_session_run_stats(config)
+                sm.save_config(args.session, updated_config)
             else:
                 emit("WARN", "MARKETPLACE_SKIPPED", session=args.session)
+    except KeyboardInterrupt:
+        emit("INFO", "INTERRUPTED_BY_USER")
     except Exception as e:
         emit("ERROR", "MARKETPLACE_FAILED", error=str(e))
         sys.exit(1)
@@ -245,7 +287,6 @@ def run_save_groups(args) -> None:
     try:
         with scraper:
             links = scraper.save_groups(args.keyword)
-            # La config est déjà mise à jour dans scraper.save_groups()
             sm.save_config(args.session, scraper.config)
             print(f"\n✓ {len(links)} groupes sauvegardés pour '{args.session}'")
     except Exception as e:
@@ -259,7 +300,7 @@ def run_save_groups(args) -> None:
 def run_login(args) -> None:
     """
     Crée une nouvelle session via login manuel dans le navigateur.
-    Délègue à SessionManager.create_session() — pas de duplication de code.
+    Délègue à SessionManager.create_session().
     """
     sm = SessionManager()
     emit("INFO", "LOGIN_START", session=args.session)
@@ -268,11 +309,11 @@ def run_login(args) -> None:
     engine.start()
 
     try:
-        ok = sm.create_session(args.session, engine._browser)
+        # CORRECTION : utilise la propriété publique engine.browser
+        ok = sm.create_session(args.session, engine.browser)
         if ok:
-            state_path = __import__("libs.config_manager",
-                                    fromlist=["get_session_state_path"]
-                                    ).get_session_state_path(args.session)
+            from libs.config_manager import get_session_state_path
+            state_path = get_session_state_path(args.session)
             print(f"\n✓ Session '{args.session}' créée avec succès.")
             print(f"  Fichier session : {state_path}")
         else:

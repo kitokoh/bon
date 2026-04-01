@@ -1,14 +1,16 @@
 """
 scraper.py — Logique métier Facebook (publication groupes, marketplace, commentaires)
 Composition avec PlaywrightEngine — aucun héritage, cross-platform, sans Selenium.
-Intégré avec BONDatabase et SelectorHealthManager pour suivi professionnel.
+Intégré avec BONDatabase, SelectorHealthManager et AntiBlockManager.
 
-CORRECTIONS v3:
-  - Appels DB corrigés : account_name= et group_url= (str) au lieu de ids
-  - health_manager.record_success/failure : signatures corrigées (3 arguments)
-  - elif not images → else (condition redondante supprimée)
-  - Détection CAPTCHA corrigée via .count() > 0
-  - Marketplace image upload via SelectorRegistry (pas de sélecteur générique)
+CORRECTIONS v4 :
+  - AntiBlockManager intégré dans le flux de publication (ignoré en v3)
+  - Déduplication texte consécutif via _pick_post(exclude_text=...)
+  - Déduplication image via anti_block.can_use_image()
+  - Vérification limite horaire avant et pendant la boucle
+  - run_marketplace applique les mêmes limites de fréquence
+  - _add_comment_after_post : fallback sur DEFAULT_COMMENTS si liste vide
+  - Toutes les corrections v3 conservées
 """
 import random
 import time
@@ -30,6 +32,7 @@ from libs.log_emitter import emit
 from libs.config_manager import resolve_media_path
 from libs.database import get_database, BONDatabase
 from automation.selector_health import get_health_manager, SelectorHealthManager
+from automation.anti_block import get_anti_block_manager, AntiBlockManager
 
 DEFAULT_COMMENTS = [
     "Super post !",
@@ -63,7 +66,7 @@ class Scraper:
         self._page          = None
         self.db             = get_database()
         self.health_manager = get_health_manager()
-        # Enregistrer le compte en DB s'il n'existe pas
+        self.anti_block     = get_anti_block_manager()
         self.db.ensure_account_exists(self.session_name)
 
     # ──────────────────────────────────────────
@@ -90,10 +93,7 @@ class Scraper:
         emit("INFO", "SESSION_START", compte=self.session_name)
 
     def close(self) -> None:
-        """Ferme le contexte navigateur proprement.
-        NOTE : les cookies sont sauvegardés UNIQUEMENT sur disque (fichier _state.json),
-        jamais en base de données.
-        """
+        """Ferme le contexte navigateur proprement."""
         try:
             if self._context:
                 self._context.close()
@@ -138,10 +138,19 @@ class Scraper:
         if len(groups) > max_groups:
             emit("INFO", "GROUPS_LIMITED", total=len(groups), processing=max_groups)
 
+        # Vérification limite horaire anti-blocage avant de démarrer
+        if not self.anti_block.can_post_now():
+            emit("WARN", "ANTI_BLOCK_HOURLY_LIMIT",
+                 compte=self.session_name,
+                 reason="Limite horaire de groupes atteinte")
+            return {"success": 0, "skipped": len(groups_to_process), "errors": 0}
+
         stats = {"success": 0, "skipped": 0, "errors": 0}
+        last_post_text = None  # pour déduplication texte consécutif
 
         for idx, group_url in enumerate(groups_to_process, 1):
-            post      = self._pick_post(posts)
+            # Déduplication texte : éviter le même texte 2 fois de suite
+            post      = self._pick_post(posts, exclude_text=last_post_text)
             post_text = post.get("text", "")
 
             if multi_image:
@@ -152,12 +161,20 @@ class Scraper:
                 single = post.get("image") or (post.get("images", [""])[0] if post.get("images") else "")
                 images = self._resolve_images_list([single]) if single else []
 
+            # Déduplication image via AntiBlockManager (max 2 usages par image)
+            images_filtered = [img for img in images if self.anti_block.can_use_image(img)]
+            if len(images_filtered) < len(images):
+                emit("WARN", "ANTI_BLOCK_IMAGE_OVERUSED",
+                     compte=self.session_name, group=idx,
+                     dropped=len(images) - len(images_filtered))
+            images = images_filtered
+
             emit("INFO", "GROUP_START",
                  compte=self.session_name, group=idx,
                  total=len(groups_to_process), url=group_url, images=len(images))
 
             try:
-                # Vérifier si le compte peut poster (cooldown DB)
+                # Vérifier cooldown DB
                 can_post, reason = self.db.can_account_post(self.session_name)
                 if not can_post:
                     emit("WARN", "ACCOUNT_COOLDOWN",
@@ -165,10 +182,20 @@ class Scraper:
                     stats["skipped"] += 1
                     continue
 
+                # Re-vérifier limite horaire en cours de boucle
+                if not self.anti_block.can_post_now():
+                    emit("WARN", "ANTI_BLOCK_HOURLY_LIMIT_MID_RUN",
+                         compte=self.session_name, remaining_groups=len(groups_to_process) - idx + 1)
+                    stats["skipped"] += len(groups_to_process) - idx + 1
+                    break
+
                 success = self._post_in_group(group_url, post_text, images)
 
                 if success:
                     stats["success"] += 1
+                    last_post_text = post_text
+                    # Notifier l'anti-block manager
+                    self.anti_block.record_post(text=post_text, images=images)
                     self.db.record_publication(
                         account_name=self.session_name,
                         group_url=group_url,
@@ -230,9 +257,7 @@ class Scraper:
     @retry(max_attempts=3, delay=4, backoff=2)
     def _post_in_group(self, group_url: str, post_text: str,
                        images: List[str]) -> bool:
-        """
-        Publie un post dans un groupe Facebook. Retryable 3×.
-        """
+        """Publie un post dans un groupe Facebook. Retryable 3×."""
         page = self._page
 
         if not self.engine.navigate(page, group_url):
@@ -248,12 +273,9 @@ class Scraper:
         try:
             btn = self.selectors.find(page, "display_input", timeout=10000)
             btn.click()
-            # record_success attend (selector_key, used_selector)
             self.health_manager.record_success("display_input", "display_input")
         except SelectorNotFound as exc:
-            self.health_manager.record_failure(
-                "display_input", str(exc), exc.tried
-            )
+            self.health_manager.record_failure("display_input", str(exc), exc.tried)
             emit("WARN", "DISPLAY_INPUT_NOT_FOUND", url=group_url[:80])
             return False
         human_delay(1.5, 0.5)
@@ -278,7 +300,6 @@ class Scraper:
             if not uploaded:
                 self._apply_theme(page)
         else:
-            # Pas d'image → thème si texte court
             if len(post_text) < 120:
                 self._apply_theme(page)
 
@@ -347,7 +368,6 @@ class Scraper:
             theme_idx = random.randint(1, 5)
             candidates = self.selectors.get_candidates("theme")
             if candidates:
-                # Le sélecteur utilise le placeholder littéral "index"
                 sel = candidates[0].replace("index", str(theme_idx))
                 page.click(sel, timeout=3000)
                 emit("DEBUG", "THEME_APPLIED", index=theme_idx)
@@ -359,8 +379,9 @@ class Scraper:
     # ──────────────────────────────────────────
 
     def _add_comment_after_post(self) -> None:
-        page     = self._page
-        comments = self.config.get("comments", DEFAULT_COMMENTS)
+        page = self._page
+        # Utiliser les commentaires custom s'ils existent, sinon fallback sur defaults
+        comments = self.config.get("comments") or DEFAULT_COMMENTS
         if not comments:
             return
 
@@ -462,7 +483,6 @@ class Scraper:
                     )
                     add_photos.click()
                     human_delay(1, 0.3)
-                    # Upload via SelectorRegistry (pas de sélecteur générique)
                     add_sel = self.selectors.get_candidates("add_image")
                     if add_sel:
                         page.set_input_files(add_sel[0], mkt_images[:10])
@@ -489,12 +509,20 @@ class Scraper:
     # ──────────────────────────────────────────
 
     @staticmethod
-    def _pick_post(posts: list) -> dict:
-        """Sélection aléatoire pondérée d'un post (champ 'weight')."""
+    def _pick_post(posts: list, exclude_text: Optional[str] = None) -> dict:
+        """
+        Sélection aléatoire pondérée d'un post (champ 'weight').
+        Évite de répéter le même texte deux fois de suite (exclude_text).
+        """
         if not posts:
             return {}
-        weights = [max(1, p.get("weight", 1)) for p in posts]
-        return random.choices(posts, weights=weights, k=1)[0]
+        candidates = posts
+        if exclude_text and len(posts) > 1:
+            candidates = [p for p in posts if p.get("text", "") != exclude_text]
+            if not candidates:
+                candidates = posts  # tous identiques → pas de choix
+        weights = [max(1, p.get("weight", 1)) for p in candidates]
+        return random.choices(candidates, weights=weights, k=1)[0]
 
     def _resolve_images_list(self, images: List[str]) -> List[str]:
         """Résout et filtre une liste de chemins d'images."""

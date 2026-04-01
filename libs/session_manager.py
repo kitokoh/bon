@@ -29,6 +29,7 @@ DEFAULT_SESSION_CONFIG = {
     "max_runs_per_day": 2,
     "cooldown_between_runs_s": 7200,  # 2 heures entre deux runs
     "last_run_ts": None,          # timestamp ISO du dernier lancement
+    "last_run_date": None,        # date ISO du dernier lancement (YYYY-MM-DD)
     "run_count_today": 0,
     "posts": [],
     "groups": [],
