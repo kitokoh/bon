@@ -1,5 +1,9 @@
 """
 error_handlers.py — Décorateur retry exponentiel + détection des états bloquants Facebook
+
+CORRECTIONS v3:
+  - Détection CAPTCHA corrigée : page.locator(...).count() > 0
+    (frame_locator() retourne toujours un objet truthy, jamais None)
 """
 import functools
 import time
@@ -28,7 +32,7 @@ def retry(
 
     Usage :
         @retry(max_attempts=3, delay=3)
-        def post_in_group(page, group_url, text, images):
+        def post_in_group(...):
             ...
     """
     def decorator(func: Callable) -> Callable:
@@ -61,7 +65,7 @@ def retry(
 
 
 # ──────────────────────────────────────────────
-# Détection des états bloquants Facebook
+# Exceptions métier
 # ──────────────────────────────────────────────
 
 class FacebookBlockedError(Exception):
@@ -85,6 +89,10 @@ class CaptchaDetectedError(Exception):
     pass
 
 
+# ──────────────────────────────────────────────
+# Détection des états bloquants
+# ──────────────────────────────────────────────
+
 def check_page_state(page) -> None:
     """
     Analyse l'état courant de la page Playwright et lève une exception
@@ -99,12 +107,12 @@ def check_page_state(page) -> None:
         emit("ERROR", "SESSION_EXPIRED", url=url)
         raise SessionExpiredError(f"Session expirée, URL: {url}")
 
-    # 2. Checkpoint (compte suspendu / vérification requise)
+    # 2. Checkpoint
     if "/checkpoint" in url:
         emit("ERROR", "ACCOUNT_CHECKPOINT", url=url)
         raise FacebookBlockedError(f"Checkpoint Facebook, URL: {url}")
 
-    # 3. Chercher les messages de blocage temporaire dans le DOM
+    # 3. Messages de blocage temporaire dans le DOM
     try:
         content = page.content()
         block_phrases = [
@@ -120,12 +128,13 @@ def check_page_state(page) -> None:
     except (FacebookBlockedError, RateLimitError):
         raise
     except Exception:
-        pass  # Impossible de lire le contenu — ignorer
+        pass
 
-    # 4. CAPTCHA
+    # 4. CAPTCHA — CORRECTION : frame_locator() retourne toujours un objet Locator
+    #    truthy → utiliser page.locator().count() > 0 pour tester la présence réelle.
     try:
-        captcha_frame = page.frame_locator("iframe[src*='recaptcha']")
-        if captcha_frame:
+        captcha_count = page.locator("iframe[src*='recaptcha']").count()
+        if captcha_count > 0:
             emit("WARN", "CAPTCHA_DETECTED", url=url)
             raise CaptchaDetectedError("reCAPTCHA détecté sur la page")
     except (CaptchaDetectedError,):
@@ -151,7 +160,6 @@ def check_group_accessible(page) -> bool:
         if any(phrase.lower() in content.lower() for phrase in unavailable_phrases):
             emit("WARN", "GROUP_UNAVAILABLE", url=url)
             return False
-        # Vérifier la présence du bouton de post
         return True
     except Exception as e:
         emit("WARN", "GROUP_CHECK_ERROR", url=url, error=str(e))
@@ -173,4 +181,3 @@ def setup_graceful_shutdown(cleanup_fn: Callable) -> None:
 
     if sys.platform != "win32":
         signal.signal(signal.SIGTERM, _handler)
-    # Sur Windows, SIGTERM n'est pas toujours supporté — on ignore silencieusement

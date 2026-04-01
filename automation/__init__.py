@@ -1,17 +1,14 @@
 """
 automation/__init__.py — Package automation moderne
 
-Ce package fournit une architecture moderne pour l'automatisation Facebook:
-- Interface unifiée (engine.py)
-- Sélecteurs centralisés multi-langue
-- Fallback automatique
-- Gestion de santé des sélecteurs
-- Anti-blocage intelligent
+CORRECTIONS v3:
+  - Selenium importé de façon optionnelle (lazy) — plus de crash si absent
+  - Playwright est le seul moteur requis
+  - SeleniumEngine n'est exposé que si selenium est installé
 """
 
 from automation.engine import AutomationEngine
 from automation.playwright_engine import PlaywrightWrapper
-from automation.selenium_engine import SeleniumEngine
 from automation.selector_tester import test_selector
 from automation.selector_health import SelectorHealthManager, get_health_manager
 from automation.anti_block import AntiBlockManager, get_anti_block_manager
@@ -19,7 +16,6 @@ from automation.anti_block import AntiBlockManager, get_anti_block_manager
 __all__ = [
     "AutomationEngine",
     "PlaywrightWrapper",
-    "SeleniumEngine",
     "test_selector",
     "SelectorHealthManager",
     "get_health_manager",
@@ -27,5 +23,12 @@ __all__ = [
     "get_anti_block_manager",
 ]
 
-__version__ = "5.0.0"
+# Selenium optionnel — exposé uniquement s'il est installé
+try:
+    from automation.selenium_engine import SeleniumEngine
+    __all__.append("SeleniumEngine")
+except ImportError:
+    pass  # Selenium non installé — fonctionnement normal avec Playwright
+
+__version__ = "5.1.0"
 __author__ = "BON Team"

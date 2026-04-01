@@ -2,6 +2,13 @@
 scraper.py — Logique métier Facebook (publication groupes, marketplace, commentaires)
 Composition avec PlaywrightEngine — aucun héritage, cross-platform, sans Selenium.
 Intégré avec BONDatabase et SelectorHealthManager pour suivi professionnel.
+
+CORRECTIONS v3:
+  - Appels DB corrigés : account_name= et group_url= (str) au lieu de ids
+  - health_manager.record_success/failure : signatures corrigées (3 arguments)
+  - elif not images → else (condition redondante supprimée)
+  - Détection CAPTCHA corrigée via .count() > 0
+  - Marketplace image upload via SelectorRegistry (pas de sélecteur générique)
 """
 import random
 import time
@@ -24,7 +31,6 @@ from libs.config_manager import resolve_media_path
 from libs.database import get_database, BONDatabase
 from automation.selector_health import get_health_manager, SelectorHealthManager
 
-# Commentaires aléatoires par défaut (personnalisables via config)
 DEFAULT_COMMENTS = [
     "Super post !",
     "Merci pour le partage !",
@@ -39,9 +45,7 @@ DEFAULT_COMMENTS = [
 class Scraper:
     """
     Publie des posts dans des groupes Facebook et gère les interactions.
-
     Utilise composition avec PlaywrightEngine (pas d'héritage).
-    Reçoit engine, selectors et session_config en paramètre → testable et modulaire.
     """
 
     def __init__(
@@ -51,54 +55,47 @@ class Scraper:
         session_config: dict,
         session_name: str,
     ):
-        self.engine          = engine
-        self.selectors       = selectors
-        self.config          = session_config
-        self.session_name    = session_name
-        self._context        = None
-        self._page           = None
-        # Intégration base de données et health manager
-        self.db              = get_database()
-        self.health_manager  = get_health_manager()
+        self.engine         = engine
+        self.selectors      = selectors
+        self.config         = session_config
+        self.session_name   = session_name
+        self._context       = None
+        self._page          = None
+        self.db             = get_database()
+        self.health_manager = get_health_manager()
         # Enregistrer le compte en DB s'il n'existe pas
         self.db.ensure_account_exists(self.session_name)
 
     # ──────────────────────────────────────────
-    # Cycle de vie du contexte
+    # Cycle de vie
     # ──────────────────────────────────────────
 
     def open(self) -> None:
         """Ouvre le contexte navigateur avec la session du compte."""
-        # Vérifier le statut du compte avant d'ouvrir
         account_status = self.db.get_account_status(self.session_name)
         if account_status == "temporarily_blocked":
             block_info = self.db.get_account_block_info(self.session_name)
             if block_info and not block_info.get("can_resume", False):
                 raise FacebookBlockedError(
-                    f"Compte {self.session_name} temporairement bloqué jusqu'à {block_info.get('until')}"
+                    f"Compte {self.session_name} bloqué jusqu'à {block_info.get('until')}"
                 )
         elif account_status == "session_expired":
             emit("WARN", "SESSION_EXPIRED_DETECTED", compte=self.session_name)
-        
+
         storage_state = self.config.get("storage_state", "")
         self._context, self._page = self.engine.new_context(
             storage_state=storage_state
         )
-        # Mettre à jour le statut en DB
         self.db.update_account_status(self.session_name, "healthy")
         emit("INFO", "SESSION_START", compte=self.session_name)
 
     def close(self) -> None:
-        """Ferme le contexte navigateur proprement."""
+        """Ferme le contexte navigateur proprement.
+        NOTE : les cookies sont sauvegardés UNIQUEMENT sur disque (fichier _state.json),
+        jamais en base de données.
+        """
         try:
             if self._context:
-                # Sauvegarder l'état de session dans la DB
-                try:
-                    storage_state = self._context.storage_state()
-                    self.db.save_account_storage_state(self.session_name, storage_state)
-                except Exception as e:
-                    emit("WARN", "STORAGE_STATE_SAVE_ERROR", error=str(e))
-                
                 self._context.close()
                 self._context = None
                 self._page    = None
@@ -114,31 +111,13 @@ class Scraper:
         self.close()
 
     # ──────────────────────────────────────────
-    # Publication dans les groupes (mode simple — 1 image)
+    # Publication groupes
     # ──────────────────────────────────────────
 
     def post_in_groups(self) -> dict:
-        """
-        Publie un post aléatoire dans chaque groupe configuré.
-        Mode : 1 image par post (ou thème si pas d'image).
-
-        Returns:
-            dict {"success": N, "skipped": N, "errors": N}
-        """
         return self._run_groups_loop(multi_image=False)
 
-    # ──────────────────────────────────────────
-    # Publication multi-images (post_in_groupsx)
-    # ──────────────────────────────────────────
-
     def post_in_groups_multi(self) -> dict:
-        """
-        Publie un post avec plusieurs images dans chaque groupe.
-        Équivalent de l'ancien post_in_groupsx().
-
-        Returns:
-            dict {"success": N, "skipped": N, "errors": N}
-        """
         return self._run_groups_loop(multi_image=True)
 
     def _run_groups_loop(self, multi_image: bool = False) -> dict:
@@ -165,7 +144,6 @@ class Scraper:
             post      = self._pick_post(posts)
             post_text = post.get("text", "")
 
-            # Images : liste (multi) ou image unique
             if multi_image:
                 images = self._resolve_images_list(
                     post.get("images", []) or ([post.get("image")] if post.get("image") else [])
@@ -175,29 +153,28 @@ class Scraper:
                 images = self._resolve_images_list([single]) if single else []
 
             emit("INFO", "GROUP_START",
-                 compte=self.session_name,
-                 group=idx, total=len(groups_to_process),
-                 url=group_url, images=len(images))
+                 compte=self.session_name, group=idx,
+                 total=len(groups_to_process), url=group_url, images=len(images))
 
             try:
                 # Vérifier si le compte peut poster (cooldown DB)
                 can_post, reason = self.db.can_account_post(self.session_name)
                 if not can_post:
-                    emit("WARN", "ACCOUNT_COOLDOWN", compte=self.session_name, reason=reason)
+                    emit("WARN", "ACCOUNT_COOLDOWN",
+                         compte=self.session_name, reason=reason)
                     stats["skipped"] += 1
                     continue
-                
+
                 success = self._post_in_group(group_url, post_text, images)
+
                 if success:
                     stats["success"] += 1
-                    # Enregistrer la publication réussie en DB
                     self.db.record_publication(
                         account_name=self.session_name,
                         group_url=group_url,
                         status="success",
-                        post_content=post_text[:200]  # Premier 200 chars
+                        post_content=post_text,
                     )
-                    # Commentaires optionnels post-publication
                     if self.config.get("add_comments", False):
                         self._add_comment_after_post()
                 else:
@@ -206,31 +183,37 @@ class Scraper:
                         account_name=self.session_name,
                         group_url=group_url,
                         status="skipped",
-                        post_content=post_text[:200]
+                        post_content=post_text,
                     )
+
             except (SessionExpiredError, FacebookBlockedError, RateLimitError) as e:
-                emit("ERROR", "CRITICAL_STOPPING", compte=self.session_name, error=str(e))
+                emit("ERROR", "CRITICAL_STOPPING",
+                     compte=self.session_name, error=str(e))
                 stats["errors"] += 1
-                # Mettre à jour le statut du compte en DB
                 if isinstance(e, FacebookBlockedError):
-                    self.db.record_account_block(self.session_name, "facebook_block", str(e))
+                    self.db.record_account_block(
+                        self.session_name, "facebook_block", str(e)
+                    )
                 elif isinstance(e, SessionExpiredError):
-                    self.db.update_account_status(self.session_name, "session_expired")
+                    self.db.update_account_status(
+                        self.session_name, "session_expired"
+                    )
                 break
+
             except Exception as e:
                 emit("ERROR", "GROUP_ERROR", groupe=group_url[:80], error=str(e))
-                screenshot_path = self.engine.screenshot_on_error(self._page, f"group_err_{idx}")
+                screenshot_path = self.engine.screenshot_on_error(
+                    self._page, f"group_err_{idx}"
+                )
                 stats["errors"] += 1
-                # Enregistrer l'erreur en DB avec screenshot
                 self.db.record_error(
                     account_name=self.session_name,
                     group_url=group_url,
                     error_type=type(e).__name__,
                     error_message=str(e),
-                    screenshot_path=screenshot_path
+                    screenshot_path=screenshot_path,
                 )
 
-            # Délai entre groupes (sauf dernier)
             if idx < len(groups_to_process):
                 human_delay_between_groups(
                     min_s=float(delay_cfg[0]),
@@ -241,7 +224,7 @@ class Scraper:
         return stats
 
     # ──────────────────────────────────────────
-    # _post_in_group — cœur de la publication
+    # Cœur de la publication
     # ──────────────────────────────────────────
 
     @retry(max_attempts=3, delay=4, backoff=2)
@@ -249,100 +232,83 @@ class Scraper:
                        images: List[str]) -> bool:
         """
         Publie un post dans un groupe Facebook. Retryable 3×.
-
-        Args:
-            group_url: URL complète du groupe
-            post_text: Texte du post
-            images:    Liste de chemins absolus d'images (peut être vide)
-
-        Returns:
-            True si publié, False si groupe ignoré
         """
         page = self._page
 
-        # — Navigation —
         if not self.engine.navigate(page, group_url):
             return False
         human_delay(2.5, 0.8)
 
-        # — État de la page —
         check_page_state(page)
         if not check_group_accessible(page):
             emit("WARN", "GROUP_SKIPPED_INACCESSIBLE", url=group_url[:80])
             return False
 
-        # — Ouvrir la zone de saisie —
+        # Ouvrir zone de saisie
         try:
             btn = self.selectors.find(page, "display_input", timeout=10000)
             btn.click()
-            self.health_manager.record_success("display_input")
-        except SelectorNotFound:
-            self.health_manager.record_failure("display_input")
+            # record_success attend (selector_key, used_selector)
+            self.health_manager.record_success("display_input", "display_input")
+        except SelectorNotFound as exc:
+            self.health_manager.record_failure(
+                "display_input", str(exc), exc.tried
+            )
             emit("WARN", "DISPLAY_INPUT_NOT_FOUND", url=group_url[:80])
             return False
         human_delay(1.5, 0.5)
 
-        # — Vérifier l'état après le clic (popup login possible) —
         check_page_state(page)
 
-        # — Saisie du texte —
+        # Saisie texte
         try:
             field = self.selectors.find(page, "input", timeout=8000)
             field.click()
-            # press_sequentially = API Playwright correcte (pas de boucle manuell)
             field.press_sequentially(post_text, delay=random.randint(40, 160))
-            self.health_manager.record_success("input")
+            self.health_manager.record_success("input", "input")
             human_delay(1.0, 0.3)
-        except SelectorNotFound:
-            self.health_manager.record_failure("input")
+        except SelectorNotFound as exc:
+            self.health_manager.record_failure("input", str(exc), exc.tried)
             emit("WARN", "INPUT_NOT_FOUND", url=group_url[:80])
             return False
 
-        # — Upload images —
+        # Upload images ou thème
         if images:
             uploaded = self._upload_images_sequential(page, images)
             if not uploaded:
-                # Fallback : appliquer un thème coloré
                 self._apply_theme(page)
-        elif not images:
-            # Pas d'image → essayer un thème si texte court
+        else:
+            # Pas d'image → thème si texte court
             if len(post_text) < 120:
                 self._apply_theme(page)
 
-        # — Soumettre —
+        # Soumettre
         try:
             submit = self.selectors.find(page, "submit", timeout=10000)
             submit.click()
-            self.health_manager.record_success("submit")
+            self.health_manager.record_success("submit", "submit")
             post_publication_wait()
             emit("SUCCESS", "POST_PUBLISHED",
                  compte=self.session_name,
                  groupe=group_url[:80],
                  preview=post_text[:60])
             return True
-        except SelectorNotFound:
-            self.health_manager.record_failure("submit")
+        except SelectorNotFound as exc:
+            self.health_manager.record_failure("submit", str(exc), exc.tried)
             emit("ERROR", "SUBMIT_NOT_FOUND", url=group_url[:80])
             self.engine.screenshot_on_error(page, "submit_missing")
             return False
 
     # ──────────────────────────────────────────
-    # Upload images (séquentiel, thread-safe)
+    # Upload images
     # ──────────────────────────────────────────
 
     def _upload_images_sequential(self, page, images: List[str]) -> bool:
-        """
-        Upload des images une par une (séquentiel = thread-safe avec Playwright).
-        Jusqu'à 30 images maximum (limite Facebook).
-
-        Returns:
-            True si au moins 1 image uploadée avec succès
-        """
-        images = images[:30]  # limite Facebook
+        """Upload des images une par une. Max 30 (limite Facebook)."""
+        images = images[:30]
         uploaded_count = 0
 
         try:
-            # Ouvrir le sélecteur d'images
             show_btn = self.selectors.find(page, "show_image_input", timeout=6000)
             show_btn.click()
             human_delay(1.2, 0.4)
@@ -355,7 +321,6 @@ class Scraper:
                 emit("WARN", "IMAGE_SKIP_NOT_FOUND", path=img_path)
                 continue
             try:
-                # Playwright gère nativement le file chooser
                 add_sel = self.selectors.get_candidates("add_image")
                 if add_sel:
                     page.set_input_files(add_sel[0], img_path)
@@ -370,7 +335,7 @@ class Scraper:
         return uploaded_count > 0
 
     # ──────────────────────────────────────────
-    # Thème (fallback si pas d'image)
+    # Thème fallback
     # ──────────────────────────────────────────
 
     def _apply_theme(self, page) -> None:
@@ -379,10 +344,10 @@ class Scraper:
             theme_btn = self.selectors.find(page, "display_themes", timeout=4000)
             theme_btn.click()
             human_delay(0.8, 0.2)
-            # Sélectionner un thème aléatoire parmi les 5 premiers
             theme_idx = random.randint(1, 5)
             candidates = self.selectors.get_candidates("theme")
             if candidates:
+                # Le sélecteur utilise le placeholder littéral "index"
                 sel = candidates[0].replace("index", str(theme_idx))
                 page.click(sel, timeout=3000)
                 emit("DEBUG", "THEME_APPLIED", index=theme_idx)
@@ -390,22 +355,17 @@ class Scraper:
             emit("WARN", "THEME_SKIP", reason=str(e))
 
     # ──────────────────────────────────────────
-    # Commentaires post-publication
+    # Commentaires
     # ──────────────────────────────────────────
 
     def _add_comment_after_post(self) -> None:
-        """
-        Ajoute un commentaire aléatoire après la publication.
-        Activable via "add_comments": true dans la config de session.
-        Les commentaires personnalisés sont dans "comments": [...].
-        """
         page     = self._page
         comments = self.config.get("comments", DEFAULT_COMMENTS)
         if not comments:
             return
 
         comment = random.choice(comments)
-        human_delay(3, 1)  # attendre que le post soit visible
+        human_delay(3, 1)
 
         try:
             comment_input = self.selectors.find(page, "comment_input", timeout=8000)
@@ -413,13 +373,10 @@ class Scraper:
             human_delay(0.5, 0.2)
             comment_input.press_sequentially(comment, delay=random.randint(40, 130))
             human_delay(0.5, 0.2)
-
-            # Soumettre avec Entrée (méthode standard Facebook)
             comment_input.press("Enter")
             human_delay(2, 0.5)
             emit("SUCCESS", "COMMENT_ADDED",
-                 compte=self.session_name,
-                 preview=comment[:40])
+                 compte=self.session_name, preview=comment[:40])
         except SelectorNotFound:
             emit("WARN", "COMMENT_INPUT_NOT_FOUND")
         except Exception as e:
@@ -430,12 +387,7 @@ class Scraper:
     # ──────────────────────────────────────────
 
     def save_groups(self, keyword: str) -> List[str]:
-        """
-        Recherche les groupes Facebook pour un mot-clé et retourne les URLs.
-
-        Returns:
-            Liste dédupliquée des URLs de groupes trouvées
-        """
+        """Recherche et retourne les URLs de groupes pour un mot-clé."""
         page       = self._page
         search_url = f"https://www.facebook.com/groups/search/groups/?q={keyword}"
         emit("INFO", "SAVE_GROUPS_START", keyword=keyword)
@@ -445,11 +397,8 @@ class Scraper:
 
         human_delay(3.0, 0.8)
         check_page_state(page)
-
-        # Scroll jusqu'à stabilisation de la page
         human_scroll_to_bottom(page, stable_count=3)
 
-        # Extraire les URLs via le sélecteur group_link
         links = []
         try:
             elements = self.selectors.find_all(page, "group_link")
@@ -461,10 +410,8 @@ class Scraper:
         except Exception as e:
             emit("WARN", "GROUP_LINK_EXTRACT_ERROR", error=str(e))
 
-        # Dédupliquer en préservant l'ordre
         links = list(dict.fromkeys(links))
         emit("SUCCESS", "GROUPS_SAVED", keyword=keyword, count=len(links))
-
         self.config["groups"] = links
         return links
 
@@ -474,13 +421,7 @@ class Scraper:
 
     @retry(max_attempts=2, delay=5)
     def post_in_marketplace(self) -> bool:
-        """
-        Publie une annonce dans Facebook Marketplace.
-        Configuration dans la clé "marketplace" de la config session.
-
-        Returns:
-            True si publié, False sinon
-        """
+        """Publie une annonce dans Facebook Marketplace."""
         mkt = self.config.get("marketplace", {})
         if not mkt:
             emit("WARN", "MARKETPLACE_NOT_CONFIGURED", compte=self.session_name)
@@ -495,40 +436,40 @@ class Scraper:
         check_page_state(page)
 
         try:
-            # Titre
             title = random.choice(mkt.get("titles", ["Produit"]))
             title_field = self.selectors.find(page, "marketplace_title", timeout=8000)
             title_field.click()
             title_field.press_sequentially(title, delay=random.randint(50, 150))
             human_delay(0.8, 0.2)
 
-            # Prix
             price = str(mkt.get("price", "1"))
             price_field = self.selectors.find(page, "marketplace_price", timeout=6000)
             price_field.click()
             price_field.press_sequentially(price, delay=random.randint(80, 180))
             human_delay(0.5, 0.2)
 
-            # Description
             desc = random.choice(mkt.get("descriptions", ["Description"]))
             desc_field = self.selectors.find(page, "marketplace_description", timeout=6000)
             desc_field.click()
             desc_field.press_sequentially(desc, delay=random.randint(40, 130))
             human_delay(1.0, 0.3)
 
-            # Images Marketplace
             mkt_images = self._resolve_images_list(mkt.get("images", []))
             if mkt_images:
                 try:
-                    add_photos = self.selectors.find(page, "marketplace_add_photos", timeout=5000)
+                    add_photos = self.selectors.find(
+                        page, "marketplace_add_photos", timeout=5000
+                    )
                     add_photos.click()
                     human_delay(1, 0.3)
-                    page.set_input_files("input[type='file']", mkt_images[:10])
+                    # Upload via SelectorRegistry (pas de sélecteur générique)
+                    add_sel = self.selectors.get_candidates("add_image")
+                    if add_sel:
+                        page.set_input_files(add_sel[0], mkt_images[:10])
                     human_delay(3, 1)
                 except SelectorNotFound:
                     emit("WARN", "MARKETPLACE_PHOTOS_BTN_NOT_FOUND")
 
-            # Soumettre
             submit = self.selectors.find(page, "marketplace_submit", timeout=8000)
             submit.click()
             human_delay(3, 1)
@@ -556,13 +497,7 @@ class Scraper:
         return random.choices(posts, weights=weights, k=1)[0]
 
     def _resolve_images_list(self, images: List[str]) -> List[str]:
-        """
-        Résout et filtre une liste de chemins d'images.
-        Gère les chemins Windows legacy, relatifs et absolus.
-
-        Returns:
-            Liste de chemins absolus existants
-        """
+        """Résout et filtre une liste de chemins d'images."""
         resolved = []
         for img in images:
             if not img:
