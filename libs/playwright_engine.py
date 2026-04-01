@@ -16,6 +16,9 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
+    # On définit des types bidons pour éviter NameError lors du chargement de la classe
+    # même si Playwright n'est pas installé (utile pour les tests unitaires)
+    Browser = BrowserContext = Page = object
     print("[ERROR] Playwright non installé. Lancez : playwright install chromium")
 
 try:
@@ -58,8 +61,8 @@ class PlaywrightEngine:
             locale:       locale navigateur (ex: "ar-MA", "tr-TR", "en-US")
             timezone_id:  fuseau horaire (ex: "Africa/Casablanca", "Europe/Istanbul")
         """
-        if not PLAYWRIGHT_AVAILABLE:
-            raise RuntimeError("Playwright n'est pas installé. Exécutez : playwright install chromium")
+        # On ne bloque plus l'instanciation si absent (pour les tests unitaires)
+        # Mais start() lèvera une erreur
 
         self.headless    = headless
         self.proxy       = proxy
@@ -77,6 +80,9 @@ class PlaywrightEngine:
 
     def start(self) -> None:
         """Démarre le navigateur Playwright."""
+        if not PLAYWRIGHT_AVAILABLE:
+            raise RuntimeError("Playwright n'est pas installé. Exécutez : playwright install chromium")
+
         emit("INFO", "BROWSER_STARTING",
              headless=self.headless, proxy=bool(self.proxy))
         self._playwright = sync_playwright().start()

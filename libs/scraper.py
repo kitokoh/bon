@@ -138,11 +138,12 @@ class Scraper:
         if len(groups) > max_groups:
             emit("INFO", "GROUPS_LIMITED", total=len(groups), processing=max_groups)
 
-        # Vérification limite horaire anti-blocage avant de démarrer
-        if not self.anti_block.can_post_now():
-            emit("WARN", "ANTI_BLOCK_HOURLY_LIMIT",
+        # Vérification globale via la DB avant de démarrer
+        can_start, reason = self.db.can_account_post(self.session_name)
+        if not can_start:
+            emit("WARN", "ACCOUNT_LIMIT_REACHED",
                  compte=self.session_name,
-                 reason="Limite horaire de groupes atteinte")
+                 reason=reason)
             return {"success": 0, "skipped": len(groups_to_process), "errors": 0}
 
         stats = {"success": 0, "skipped": 0, "errors": 0}
@@ -174,18 +175,11 @@ class Scraper:
                  total=len(groups_to_process), url=group_url, images=len(images))
 
             try:
-                # Vérifier cooldown DB
+                # Vérifier limites DB (journalières et horaires)
                 can_post, reason = self.db.can_account_post(self.session_name)
                 if not can_post:
-                    emit("WARN", "ACCOUNT_COOLDOWN",
+                    emit("WARN", "ACCOUNT_LIMIT_MID_RUN",
                          compte=self.session_name, reason=reason)
-                    stats["skipped"] += 1
-                    continue
-
-                # Re-vérifier limite horaire en cours de boucle
-                if not self.anti_block.can_post_now():
-                    emit("WARN", "ANTI_BLOCK_HOURLY_LIMIT_MID_RUN",
-                         compte=self.session_name, remaining_groups=len(groups_to_process) - idx + 1)
                     stats["skipped"] += len(groups_to_process) - idx + 1
                     break
 
@@ -305,7 +299,9 @@ class Scraper:
 
         # Soumettre
         try:
-            submit = self.selectors.find(page, "submit", timeout=10000)
+            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+            submit = self.selectors.find(page, "submit", timeout=12000)
             submit.click()
             self.health_manager.record_success("submit", "submit")
             post_publication_wait()
@@ -314,6 +310,10 @@ class Scraper:
                  groupe=group_url[:80],
                  preview=post_text[:60])
             return True
+        except PlaywrightTimeoutError:
+            emit("ERROR", "SUBMIT_TIMEOUT", url=group_url[:80])
+            self.engine.screenshot_on_error(page, "submit_timeout")
+            return False
         except SelectorNotFound as exc:
             self.health_manager.record_failure("submit", str(exc), exc.tried)
             emit("ERROR", "SUBMIT_NOT_FOUND", url=group_url[:80])
@@ -368,7 +368,8 @@ class Scraper:
             theme_idx = random.randint(1, 5)
             candidates = self.selectors.get_candidates("theme")
             if candidates:
-                sel = candidates[0].replace("index", str(theme_idx))
+                # Utiliser un remplacement plus robuste (supporte 'index' ou '{index}')
+                sel = candidates[0].replace("{index}", str(theme_idx)).replace("index", str(theme_idx))
                 page.click(sel, timeout=3000)
                 emit("DEBUG", "THEME_APPLIED", index=theme_idx)
         except Exception as e:

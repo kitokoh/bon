@@ -139,33 +139,17 @@ def _load_and_validate_session(session_name: str) -> tuple:
     return sm, config
 
 
-def _check_frequency_limits(config: dict, session_name: str) -> None:
+def _check_frequency_limits(session_name: str) -> None:
     """
-    Vérifie les limites de fréquence (cooldown + runs/jour).
-    Exits avec code 0 si limite atteinte (normal, pas une erreur).
-
-    CORRECTION : remet run_count_today à 0 si last_run_date != aujourd'hui
-    pour éviter un blocage injuste au lendemain.
+    Vérifie les limites de fréquence via la base de données.
+    Exits avec code 0 si limite atteinte.
     """
-    from datetime import date
-    today = date.today().isoformat()
+    from libs.database import get_database
+    db = get_database()
 
-    # Si le dernier run était un autre jour → le compteur est périmé
-    if config.get("last_run_date", "") != today:
-        config["run_count_today"] = 0
-
-    # Cooldown entre runs
-    last_run = config.get("last_run_ts")
-    cooldown_s = int(config.get("cooldown_between_runs_s", 7200))
-    if not check_cooldown(last_run, cooldown_s):
-        emit("WARN", "COOLDOWN_ACTIVE_EXIT", session=session_name)
-        sys.exit(0)
-
-    # Limite journalière
-    run_count = int(config.get("run_count_today", 0))
-    max_runs  = int(config.get("max_runs_per_day", 3))
-    if not check_session_limit(run_count, max_runs):
-        emit("WARN", "DAILY_LIMIT_REACHED_EXIT", session=session_name)
+    can_post, reason = db.can_account_post(session_name)
+    if not can_post:
+        emit("WARN", "FREQUENCY_LIMIT_EXIT", session=session_name, reason=reason)
         sys.exit(0)
 
 
@@ -192,7 +176,7 @@ def _build_engine_and_scraper(args, config: dict, session_name: str):
 def run_post(args, multi_image: bool = False) -> None:
     """Publie dans les groupes (simple ou multi-images)."""
     sm, config = _load_and_validate_session(args.session)
-    _check_frequency_limits(config, args.session)
+    _check_frequency_limits(args.session)
 
     engine, _, scraper = _build_engine_and_scraper(args, config, args.session)
 
@@ -241,7 +225,7 @@ def run_marketplace(args) -> None:
         sys.exit(1)
 
     # CORRECTION : appliquer les mêmes limites de fréquence que run_post
-    _check_frequency_limits(config, args.session)
+    _check_frequency_limits(args.session)
 
     engine, _, scraper = _build_engine_and_scraper(args, config, args.session)
     engine.start()
