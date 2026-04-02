@@ -4,6 +4,8 @@ __main__.py v11 — Point d'entrée BON
 Commandes principales :
   python -m bon robot create --robot <nom> [--account <nom>] [--proxy-server URL ...]
   python -m bon robot config show|set|clear-proxy --robot <nom>
+  python -m bon robot config set --robot <nom> [--max-groups-per-run N] [--locale fr-FR]
+  python -m bon robot config set --robot <nom> [--telegram-token T] [--captcha-key K]
   python -m bon post --robot <nom> [--headless] [--validate-proxy]
   python -m bon export --out fichier.csv [--robot <nom>]
   python -m bon captcha test
@@ -90,9 +92,36 @@ def parse_args():
     rcs.add_argument("--robot", required=True)
     rcset = rcfg_sub.add_parser("set")
     rcset.add_argument("--robot", required=True)
+    # Proxy
     rcset.add_argument("--proxy-server", default=None)
     rcset.add_argument("--proxy-user", default=None)
     rcset.add_argument("--proxy-pass", default=None)
+    # Limites de run
+    rcset.add_argument("--max-groups-per-run", type=int, default=None,
+                       metavar="N", help="Nombre max de groupes par run (ex. 10)")
+    rcset.add_argument("--max-runs-per-day", type=int, default=None,
+                       metavar="N", help="Nombre max de runs par jour (ex. 2)")
+    rcset.add_argument("--delay-min", type=int, default=None,
+                       metavar="SEC", help="Delai min entre groupes en secondes")
+    rcset.add_argument("--delay-max", type=int, default=None,
+                       metavar="SEC", help="Delai max entre groupes en secondes")
+    rcset.add_argument("--cooldown", type=int, default=None,
+                       metavar="SEC", help="Cooldown entre runs (ex. 7200)")
+    # Localisation
+    rcset.add_argument("--locale", default=None,
+                       metavar="LOCALE", help="Locale navigateur (ex. fr-FR, en-US)")
+    rcset.add_argument("--timezone", default=None,
+                       metavar="TZ", help="Timezone (ex. Europe/Paris, America/New_York)")
+    # Notifications Telegram
+    rcset.add_argument("--telegram-token", default=None,
+                       metavar="TOKEN", help="Token bot Telegram")
+    rcset.add_argument("--telegram-chat-id", default=None,
+                       metavar="ID", help="Chat ID Telegram")
+    # CAPTCHA
+    rcset.add_argument("--captcha-key", default=None,
+                       metavar="KEY", help="Cle 2captcha pour ce robot (None = desactive)")
+    rcset.add_argument("--clear-captcha-key", action="store_true",
+                       help="Efface la cle captcha de ce robot (retombe sur variable globale)")
     rcc = rcfg_sub.add_parser("clear-proxy")
     rcc.add_argument("--robot", required=True)
 
@@ -278,6 +307,9 @@ def cmd_robot_config_show(args):
 
 def cmd_robot_config_set(args):
     rm, cfg = _load_robot(args.robot)
+    changed = []
+
+    # --- Proxy ---
     if args.proxy_server:
         from libs.proxy_util import build_playwright_proxy
         px = build_playwright_proxy(args.proxy_server, args.proxy_user, args.proxy_pass)
@@ -285,8 +317,58 @@ def cmd_robot_config_set(args):
         cfg["proxy_server"] = px["server"]
         cfg["proxy_username"] = px.get("username") or ""
         cfg["proxy_password"] = px.get("password") or ""
+        changed.append("proxy")
+
+    # --- Limites de run ---
+    if args.max_groups_per_run is not None:
+        cfg["max_groups_per_run"] = args.max_groups_per_run
+        changed.append(f"max_groups_per_run={args.max_groups_per_run}")
+    if args.max_runs_per_day is not None:
+        cfg["max_runs_per_day"] = args.max_runs_per_day
+        changed.append(f"max_runs_per_day={args.max_runs_per_day}")
+    if args.delay_min is not None:
+        cfg["delay_min_s"] = args.delay_min
+        changed.append(f"delay_min_s={args.delay_min}")
+    if args.delay_max is not None:
+        cfg["delay_max_s"] = args.delay_max
+        changed.append(f"delay_max_s={args.delay_max}")
+    if args.cooldown is not None:
+        cfg["cooldown_between_runs_s"] = args.cooldown
+        changed.append(f"cooldown_between_runs_s={args.cooldown}")
+
+    # --- Localisation ---
+    if args.locale is not None:
+        cfg["locale"] = args.locale
+        changed.append(f"locale={args.locale}")
+    if args.timezone is not None:
+        cfg["timezone_id"] = args.timezone
+        changed.append(f"timezone_id={args.timezone}")
+
+    # --- Telegram ---
+    if args.telegram_token is not None:
+        cfg["telegram_token"] = args.telegram_token
+        changed.append("telegram_token=***")
+    if args.telegram_chat_id is not None:
+        cfg["telegram_chat_id"] = args.telegram_chat_id
+        changed.append(f"telegram_chat_id={args.telegram_chat_id}")
+
+    # --- CAPTCHA ---
+    if getattr(args, "clear_captcha_key", False):
+        cfg["captcha_api_key"] = None
+        changed.append("captcha_api_key=None (retombe sur BON_2CAPTCHA_KEY global)")
+    elif args.captcha_key is not None:
+        cfg["captcha_api_key"] = args.captcha_key
+        changed.append("captcha_api_key=***")
+
+    if not changed:
+        print("Aucun parametre modifie. Utilisez --help pour voir les options.")
+        return
+
     rm.save_config(args.robot, cfg)
-    print(f"✓ Config enregistrée pour '{args.robot}'")
+    print(f"Config mise a jour pour '{args.robot}' :")
+    for c in changed:
+        print(f"  ✓ {c}")
+
 
 
 def cmd_robot_config_clear_proxy(args):

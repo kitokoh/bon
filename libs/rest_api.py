@@ -1,10 +1,17 @@
 """
-rest_api.py v11 — API REST Flask pour supervision et intégrations (n8n, Make, etc.).
+rest_api.py v12 — API REST Flask pour supervision et intégrations (n8n, Make, etc.).
 
-Sécurité : Authorization: Bearer <token>  (sauf /health et /api/v1/health)
+Securite : Authorization: Bearer <token>  (sauf /health et /api/v1/health)
 Variable : BON_API_TOKEN (obligatoire)
 
-Préfixes supportés : /v1/... et /api/v1/... (alias identiques pour compatibilité documentation / audit).
+Rate limiting : BON_API_RATE_LIMIT (defaut "60/minute") — necessite flask-limiter
+Prefixes supportes : /v1/... et /api/v1/... (alias identiques pour compatibilite).
+
+Nouveautes v12 :
+  - Filtres date_from / date_to sur /publications et /publications/export
+  - Rate limiting configurable par variable d'environnement
+  - Gestion robuste des ImportError pour dependances optionnelles
+  - Version bump -> 12
 """
 from __future__ import annotations
 
@@ -21,6 +28,27 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _PATHS_PUBLIC = frozenset({"/health", "/api/v1/health"})
 
 
+def _try_enable_limiter(app, default_limit: str):
+    """Active Flask-Limiter si disponible. Echec silencieux sinon (warning log)."""
+    try:
+        from flask_limiter import Limiter
+        from flask_limiter.util import get_remote_address
+        limiter = Limiter(
+            get_remote_address,
+            app=app,
+            default_limits=[default_limit],
+            storage_uri="memory://",
+        )
+        return limiter
+    except ImportError:
+        import logging
+        logging.getLogger("bon.api").warning(
+            "flask-limiter non installe : rate limiting desactive. "
+            "Installez avec : pip install flask-limiter"
+        )
+        return None
+
+
 def create_app(token: Optional[str] = None):
     try:
         from flask import Flask, Response, abort, jsonify, request, send_file
@@ -30,7 +58,11 @@ def create_app(token: Optional[str] = None):
     app = Flask(__name__)
     expected = (token or os.environ.get("BON_API_TOKEN", "")).strip()
     if not expected:
-        raise RuntimeError("BON_API_TOKEN requis pour démarrer l’API")
+        raise RuntimeError("BON_API_TOKEN requis pour demarrer l'API")
+
+    # Rate limiting configurable
+    rate_limit = os.environ.get("BON_API_RATE_LIMIT", "60/minute").strip()
+    _try_enable_limiter(app, rate_limit)
 
     @app.before_request
     def _auth():
@@ -43,7 +75,7 @@ def create_app(token: Optional[str] = None):
             abort(403)
 
     def _health():
-        return jsonify({"status": "ok", "service": "bon", "version": 11})
+        return jsonify({"status": "ok", "service": "bon", "version": 12})
 
     app.add_url_rule("/health", "health", _health, methods=["GET"])
     app.add_url_rule("/api/v1/health", "health_api", _health, methods=["GET"])
@@ -60,7 +92,10 @@ def create_app(token: Optional[str] = None):
         r = get_database().get_robot(name)
         if not r:
             abort(404)
-        out = {k: v for k, v in r.items() if "password" not in k.lower()}
+        # Masquer tous les champs sensibles
+        sensitive = {"password", "proxy_password", "captcha_api_key", "telegram_token"}
+        out = {k: v for k, v in r.items()
+               if not any(s in k.lower() for s in sensitive)}
         return jsonify(out)
 
     app.add_url_rule("/v1/robots/<name>", "robot_one", _robot_one, methods=["GET"])
@@ -78,8 +113,11 @@ def create_app(token: Optional[str] = None):
         robot = request.args.get("robot") or None
         limit = min(int(request.args.get("limit", 50)), 500)
         offset = int(request.args.get("offset", 0))
+        date_from = request.args.get("date_from") or None
+        date_to = request.args.get("date_to") or None
         rows = get_database().get_publications_paginated(
-            limit=limit, offset=offset, robot_name=robot
+            limit=limit, offset=offset, robot_name=robot,
+            date_from=date_from, date_to=date_to,
         )
         return jsonify({"count": len(rows), "items": rows})
 
@@ -90,11 +128,14 @@ def create_app(token: Optional[str] = None):
         from libs.database import get_database
         fmt = (request.args.get("format") or "csv").strip().lower()
         robot = request.args.get("robot") or None
+        date_from = request.args.get("date_from") or None
+        date_to = request.args.get("date_to") or None
         db = get_database()
         if fmt == "xlsx":
             try:
                 buf = io.BytesIO()
-                db.export_publications_xlsx(buf, robot_name=robot)
+                db.export_publications_xlsx(buf, robot_name=robot,
+                                            date_from=date_from, date_to=date_to)
                 buf.seek(0)
                 return send_file(
                     buf,
@@ -103,9 +144,10 @@ def create_app(token: Optional[str] = None):
                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             except ImportError as e:
-                return jsonify({"error": str(e)}), 501
+                return jsonify({"error": f"openpyxl manquant : {e}"}), 501
+        # CSV export avec filtres date
         si = io.StringIO()
-        rows = db._publication_export_rows(robot)
+        rows = db._publication_export_rows(robot, date_from=date_from, date_to=date_to)
         fieldnames = [
             "id", "robot_name", "account", "group_url",
             "campaign_name", "variant_id", "status", "created_at", "error_message",
@@ -119,17 +161,13 @@ def create_app(token: Optional[str] = None):
         return Response(
             data.encode("utf-8"),
             mimetype="text/csv; charset=utf-8",
-            headers={
-                "Content-Disposition": "attachment; filename=bon_publications.csv",
-            },
+            headers={"Content-Disposition": "attachment; filename=bon_publications.csv"},
         )
 
-    app.add_url_rule(
-        "/v1/publications/export", "pub_export", _publications_export, methods=["GET"]
-    )
-    app.add_url_rule(
-        "/api/v1/publications/export", "pub_export_api", _publications_export, methods=["GET"]
-    )
+    app.add_url_rule("/v1/publications/export", "pub_export",
+                     _publications_export, methods=["GET"])
+    app.add_url_rule("/api/v1/publications/export", "pub_export_api",
+                     _publications_export, methods=["GET"])
 
     def _campaigns():
         from libs.database import get_database
@@ -179,7 +217,7 @@ def create_app(token: Optional[str] = None):
         body = request.get_json(silent=True) or {}
         cmd = (body.get("command") or "post").strip()
         headless = bool(body.get("headless", True))
-        argv = [sys.executable, str(REPO_ROOT / "__main__.py"), cmd, "--robot", name]
+        argv = [sys.executable, "-m", "bon", cmd, "--robot", name]
         if cmd == "post" and headless:
             argv.append("--headless")
         subprocess.Popen(
@@ -189,12 +227,10 @@ def create_app(token: Optional[str] = None):
         )
         return jsonify({"started": True, "command": cmd, "robot": name})
 
-    app.add_url_rule(
-        "/v1/robots/<name>/run", "robot_run", _robot_run, methods=["POST"]
-    )
-    app.add_url_rule(
-        "/api/v1/robots/<name>/run", "robot_run_api", _robot_run, methods=["POST"]
-    )
+    app.add_url_rule("/v1/robots/<name>/run", "robot_run",
+                     _robot_run, methods=["POST"])
+    app.add_url_rule("/api/v1/robots/<name>/run", "robot_run_api",
+                     _robot_run, methods=["POST"])
 
     return app
 

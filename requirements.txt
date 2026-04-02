@@ -1,10 +1,10 @@
-# BON — Facebook Publisher v11
-# Dépendances — avril 2026
+# BON — Facebook Publisher v12
+# Dependances — avril 2026
 
 # Moteur navigateur
 playwright>=1.50.0
 
-# Requêtes HTTP (CDN sélecteurs)
+# Requetes HTTP (CDN selecteurs, captcha)
 requests>=2.32.0
 
 # Utilitaires
@@ -14,16 +14,16 @@ emoji>=2.14.0
 # Tests
 pytest>=8.0.0
 
-# v11 : planificateur + API REST + export Excel
+# v11/v12 : planificateur + API REST + export Excel
 apscheduler>=3.10.0
 flask>=3.0.0
 openpyxl>=3.1.0
 
-# Résolution CAPTCHA : uniquement clé API + requests (voir libs/captcha_solver.py)
-# 2captcha-python>=1.2.0
+# v12 : rate limiting API REST (optionnel mais recommande)
+flask-limiter>=3.5.0
 
-# Optionnel : infos réseau (check_license)
-# psutil>=5.9.0
+# Resolution CAPTCHA : uniquement cle API + requests (voir libs/captcha_solver.py)
+# Aucune dependance SDK supplementaire requise.
 
 # Pour installer :
 # pip install -r requirements.txt && playwright install chromium

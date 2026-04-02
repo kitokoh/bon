@@ -47,20 +47,55 @@ class BONDatabase:
             except ImportError:
                 db_path = "logs/bon.db"
         self.db_path = pathlib.Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Pour :memory:, mkdir échouerait sur le parent '.' → on skipppe
+        if str(self.db_path) != ":memory:":
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        # Connexion persistante : indispensable pour :memory: (chaque
+        # sqlite3.connect(':memory:') crée une base distincte et vide).
+        # Pour les fichiers sur disque, une connexion longue durée est aussi
+        # plus efficace (WAL activé une seule fois, cache partagé).
+        self._conn = sqlite3.connect(
+            str(self.db_path), check_same_thread=False
+        )
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA cache_size=-8000")
+        self._closed = False
         self._init_db()
+
+    # ── Cycle de vie ───────────────────────────────────────────────────────
+
+    def close(self) -> None:
+        """Ferme explicitement la connexion SQLite.
+
+        A appeler dans les tests apres chaque instance BONDatabase(:memory:)
+        ou en fin de script pour liberer le descripteur de fichier.
+        Idempotent : appels multiples sans effet.
+        """
+        with self._lock:
+            if not self._closed:
+                try:
+                    self._conn.close()
+                finally:
+                    self._closed = True
+
+    def __del__(self) -> None:
+        """Filet de securite : ferme la connexion si close() n'a pas ete appele."""
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ── Connexion ──────────────────────────────────────────────────────────
 
     def _connect(self):
-        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA cache_size=-8000")
-        return conn
+        """Retourne la connexion persistante (thread-safe via self._lock)."""
+        if self._closed:
+            raise RuntimeError("BONDatabase: connexion deja fermee (close() appele)")
+        return self._conn
 
     def _exec_conn(self, conn, sql, params=()):
         return conn.execute(sql, params)
@@ -75,20 +110,14 @@ class BONDatabase:
     def _exec(self, sql, params=()):
         with self._lock:
             conn = self._connect()
-            try:
-                cur = conn.execute(sql, params)
-                conn.commit()
-                return cur
-            finally:
-                conn.close()
+            cur = conn.execute(sql, params)
+            conn.commit()
+            return cur
 
     def _query(self, sql, params=()):
         with self._lock:
             conn = self._connect()
-            try:
-                return self._query_conn(conn, sql, params)
-            finally:
-                conn.close()
+            return self._query_conn(conn, sql, params)
 
     def _query_one(self, sql, params=()):
         r = self._query(sql, params)
@@ -97,10 +126,7 @@ class BONDatabase:
     def _query_scalar(self, sql, params=()):
         with self._lock:
             conn = self._connect()
-            try:
-                return self._scalar_conn(conn, sql, params)
-            finally:
-                conn.close()
+            return self._scalar_conn(conn, sql, params)
 
     # ── Schéma complet v9 ─────────────────────────────────────────────────
 
@@ -147,6 +173,7 @@ class BONDatabase:
                 proxy_password TEXT,
                 telegram_token TEXT DEFAULT '',
                 telegram_chat_id TEXT DEFAULT '',
+                captcha_api_key TEXT DEFAULT NULL,
                 active INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -404,14 +431,11 @@ class BONDatabase:
         ]
         with self._lock:
             conn = self._connect()
-            try:
-                for stmt in ddl:
-                    conn.execute(stmt)
-                conn.commit()
-                self._apply_migrations(conn)
-                emit("INFO", "DATABASE_INITIALIZED_V11", path=str(self.db_path))
-            finally:
-                conn.close()
+            for stmt in ddl:
+                conn.execute(stmt)
+            conn.commit()
+            self._apply_migrations(conn)
+            emit("INFO", "DATABASE_INITIALIZED_V11", path=str(self.db_path))
 
     def _apply_migrations(self, conn):
         """Migrations idempotentes — silencieuses si colonne déjà présente."""
@@ -419,6 +443,7 @@ class BONDatabase:
             "ALTER TABLE accounts ADD COLUMN consecutive_failures INTEGER DEFAULT 0",
             "ALTER TABLE accounts ADD COLUMN warmup_completed INTEGER DEFAULT 0",
             "ALTER TABLE groups ADD COLUMN active INTEGER DEFAULT 1",
+            "ALTER TABLE robots ADD COLUMN captcha_api_key TEXT DEFAULT NULL",
             "ALTER TABLE publications ADD COLUMN robot_name TEXT",
             "ALTER TABLE publications ADD COLUMN post_type TEXT DEFAULT 'text_image'",
         ]
@@ -476,59 +501,58 @@ class BONDatabase:
 
         with self._lock:
             conn = self._connect()
-            try:
-                existing = self._scalar_conn(
-                    conn, "SELECT id FROM robots WHERE robot_name=?", (robot_name,)
-                )
-                delay = config.get("delay_between_groups", [60, 120])
-                params = (
-                    storage_state_path,
-                    config.get("max_groups_per_run", 10),
-                    config.get("max_groups_per_hour", 5),
-                    delay[0] if isinstance(delay, list) else delay,
-                    delay[-1] if isinstance(delay, list) else delay,
-                    config.get("max_runs_per_day", 2),
-                    config.get("cooldown_between_runs_s", 7200),
-                    config.get("locale", "fr-FR"),
-                    config.get("timezone_id", "Europe/Paris"),
-                    config.get("platform", "windows"),
-                    proxy_server, proxy_username, proxy_password,
-                    config.get("telegram_token", ""),
-                    config.get("telegram_chat_id", ""),
-                    now,
-                )
-                if existing:
-                    conn.execute(
-                        """UPDATE robots SET
-                            account_id=?, storage_state_path=?,
-                            max_groups_per_run=?, max_groups_per_hour=?,
-                            delay_min_s=?, delay_max_s=?,
-                            max_runs_per_day=?, cooldown_between_runs_s=?,
-                            locale=?, timezone_id=?, platform=?,
-                            proxy_server=?, proxy_username=?, proxy_password=?,
-                            telegram_token=?, telegram_chat_id=?, updated_at=?
-                           WHERE robot_name=?""",
-                        (account_id,) + params + (robot_name,)
-                    )
-                    conn.commit()
-                    return existing
-                cur = conn.execute(
-                    """INSERT INTO robots (
-                        robot_name, account_id, storage_state_path,
-                        max_groups_per_run, max_groups_per_hour,
-                        delay_min_s, delay_max_s,
-                        max_runs_per_day, cooldown_between_runs_s,
-                        locale, timezone_id, platform,
-                        proxy_server, proxy_username, proxy_password,
-                        telegram_token, telegram_chat_id,
-                        created_at, updated_at
-                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (robot_name, account_id) + params + (now,)
+            existing = self._scalar_conn(
+                conn, "SELECT id FROM robots WHERE robot_name=?", (robot_name,)
+            )
+            delay = config.get("delay_between_groups", [60, 120])
+            params = (
+                storage_state_path,
+                config.get("max_groups_per_run", 10),
+                config.get("max_groups_per_hour", 5),
+                delay[0] if isinstance(delay, list) else delay,
+                delay[-1] if isinstance(delay, list) else delay,
+                config.get("max_runs_per_day", 2),
+                config.get("cooldown_between_runs_s", 7200),
+                config.get("locale", "fr-FR"),
+                config.get("timezone_id", "Europe/Paris"),
+                config.get("platform", "windows"),
+                proxy_server, proxy_username, proxy_password,
+                config.get("telegram_token", ""),
+                config.get("telegram_chat_id", ""),
+                config.get("captcha_api_key", None),
+                now,
+            )
+            if existing:
+                conn.execute(
+                    """UPDATE robots SET
+                        account_id=?, storage_state_path=?,
+                        max_groups_per_run=?, max_groups_per_hour=?,
+                        delay_min_s=?, delay_max_s=?,
+                        max_runs_per_day=?, cooldown_between_runs_s=?,
+                        locale=?, timezone_id=?, platform=?,
+                        proxy_server=?, proxy_username=?, proxy_password=?,
+                        telegram_token=?, telegram_chat_id=?,
+                        captcha_api_key=?, updated_at=?
+                       WHERE robot_name=?""",
+                    (account_id,) + params + (robot_name,)
                 )
                 conn.commit()
-                return cur.lastrowid
-            finally:
-                conn.close()
+                return existing
+            cur = conn.execute(
+                """INSERT INTO robots (
+                    robot_name, account_id, storage_state_path,
+                    max_groups_per_run, max_groups_per_hour,
+                    delay_min_s, delay_max_s,
+                    max_runs_per_day, cooldown_between_runs_s,
+                    locale, timezone_id, platform,
+                    proxy_server, proxy_username, proxy_password,
+                    telegram_token, telegram_chat_id, captcha_api_key,
+                    created_at, updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (robot_name, account_id) + params + (now,)
+            )
+            conn.commit()
+            return cur.lastrowid
 
     def get_robot(self, robot_name: str) -> Optional[Dict]:
         row = self._query_one(
@@ -565,6 +589,10 @@ class BONDatabase:
             "SELECT robot_name FROM robots WHERE active=1 ORDER BY robot_name"
         )]
 
+    def list_sessions(self) -> List[str]:
+        """Alias de list_robot_names() — rétrocompatibilité session_manager / config_manager."""
+        return self.list_robot_names()
+
     def robot_exists(self, robot_name: str) -> bool:
         return bool(self._query_scalar(
             "SELECT COUNT(*) FROM robots WHERE robot_name=? AND active=1",
@@ -587,20 +615,17 @@ class BONDatabase:
             return False
         with self._lock:
             conn = self._connect()
-            try:
-                group_id = self._resolve_group_id_conn(conn, group_url)
-                conn.execute(
-                    "INSERT OR IGNORE INTO robot_groups (robot_id, group_id) VALUES (?,?)",
-                    (robot_id, group_id)
-                )
-                conn.execute(
-                    "UPDATE robot_groups SET active=1 WHERE robot_id=? AND group_id=?",
-                    (robot_id, group_id)
-                )
-                conn.commit()
-                return True
-            finally:
-                conn.close()
+            group_id = self._resolve_group_id_conn(conn, group_url)
+            conn.execute(
+                "INSERT OR IGNORE INTO robot_groups (robot_id, group_id) VALUES (?,?)",
+                (robot_id, group_id)
+            )
+            conn.execute(
+                "UPDATE robot_groups SET active=1 WHERE robot_id=? AND group_id=?",
+                (robot_id, group_id)
+            )
+            conn.commit()
+            return True
 
     def assign_campaign_to_robot(self, robot_name: str, campaign_name: str) -> bool:
         robot_id    = self._resolve_robot_id(robot_name)
@@ -680,27 +705,24 @@ class BONDatabase:
         now   = datetime.now().isoformat()
         with self._lock:
             conn = self._connect()
-            try:
-                ex = self._scalar_conn(
-                    conn,
-                    "SELECT id FROM robot_run_stats WHERE robot_name=? AND run_date=?",
-                    (robot_name, today)
+            ex = self._scalar_conn(
+                conn,
+                "SELECT id FROM robot_run_stats WHERE robot_name=? AND run_date=?",
+                (robot_name, today)
+            )
+            if ex:
+                conn.execute(
+                    "UPDATE robot_run_stats SET run_count=run_count+1, last_run_ts=?"
+                    " WHERE robot_name=? AND run_date=?",
+                    (now, robot_name, today)
                 )
-                if ex:
-                    conn.execute(
-                        "UPDATE robot_run_stats SET run_count=run_count+1, last_run_ts=?"
-                        " WHERE robot_name=? AND run_date=?",
-                        (now, robot_name, today)
-                    )
-                else:
-                    conn.execute(
-                        "INSERT INTO robot_run_stats (robot_name,run_date,run_count,last_run_ts)"
-                        " VALUES (?,?,1,?)",
-                        (robot_name, today, now)
-                    )
-                conn.commit()
-            finally:
-                conn.close()
+            else:
+                conn.execute(
+                    "INSERT INTO robot_run_stats (robot_name,run_date,run_count,last_run_ts)"
+                    " VALUES (?,?,1,?)",
+                    (robot_name, today, now)
+                )
+            conn.commit()
 
     def check_run_limits(self, robot_name: str) -> tuple:
         robot = self.get_robot(robot_name)
@@ -730,16 +752,13 @@ class BONDatabase:
         now = datetime.now().isoformat()
         with self._lock:
             conn = self._connect()
-            try:
-                cur = conn.execute(
-                    "INSERT INTO accounts (name,email,profile_url,last_activity_date)"
-                    " VALUES (?,?,?,?)",
-                    (name, email, profile_url, now)
-                )
-                conn.commit()
-                return cur.lastrowid
-            finally:
-                conn.close()
+            cur = conn.execute(
+                "INSERT INTO accounts (name,email,profile_url,last_activity_date)"
+                " VALUES (?,?,?,?)",
+                (name, email, profile_url, now)
+            )
+            conn.commit()
+            return cur.lastrowid
 
     def ensure_account_exists(self, name, email=None, profile_url=None):
         row = self._query_one("SELECT id FROM accounts WHERE name=?", (name,))
@@ -860,26 +879,23 @@ class BONDatabase:
     def add_group(self, url, name=None, category=None, language="fr", members_count=None):
         with self._lock:
             conn = self._connect()
-            try:
-                rows = self._query_conn(conn, "SELECT id FROM groups WHERE url=?", (url,))
-                if rows:
-                    conn.execute(
-                        "UPDATE groups SET name=COALESCE(?,name),"
-                        "category=COALESCE(?,category),language=COALESCE(?,language),"
-                        "members_count=COALESCE(?,members_count) WHERE url=?",
-                        (name, category, language, members_count, url)
-                    )
-                    conn.commit()
-                    return rows[0]["id"]
-                cur = conn.execute(
-                    "INSERT INTO groups (url,name,category,language,members_count)"
-                    " VALUES (?,?,?,?,?)",
-                    (url, name, category, language, members_count)
+            rows = self._query_conn(conn, "SELECT id FROM groups WHERE url=?", (url,))
+            if rows:
+                conn.execute(
+                    "UPDATE groups SET name=COALESCE(?,name),"
+                    "category=COALESCE(?,category),language=COALESCE(?,language),"
+                    "members_count=COALESCE(?,members_count) WHERE url=?",
+                    (name, category, language, members_count, url)
                 )
                 conn.commit()
-                return cur.lastrowid
-            finally:
-                conn.close()
+                return rows[0]["id"]
+            cur = conn.execute(
+                "INSERT INTO groups (url,name,category,language,members_count)"
+                " VALUES (?,?,?,?,?)",
+                (url, name, category, language, members_count)
+            )
+            conn.commit()
+            return cur.lastrowid
 
     def get_group_by_url(self, url):
         return self._query_one("SELECT * FROM groups WHERE url=?", (url,))
@@ -894,54 +910,48 @@ class BONDatabase:
     def upsert_campaign(self, name, description="", language="fr", active=True):
         with self._lock:
             conn = self._connect()
-            try:
-                row = self._query_conn(conn, "SELECT id FROM campaigns WHERE name=?", (name,))
-                if row:
-                    conn.execute(
-                        "UPDATE campaigns SET description=?,language=?,active=? WHERE name=?",
-                        (description, language, 1 if active else 0, name)
-                    )
-                    conn.commit()
-                    return row[0]["id"]
-                cur = conn.execute(
-                    "INSERT INTO campaigns (name,description,language,active) VALUES (?,?,?,?)",
-                    (name, description, language, 1 if active else 0)
+            row = self._query_conn(conn, "SELECT id FROM campaigns WHERE name=?", (name,))
+            if row:
+                conn.execute(
+                    "UPDATE campaigns SET description=?,language=?,active=? WHERE name=?",
+                    (description, language, 1 if active else 0, name)
                 )
                 conn.commit()
-                return cur.lastrowid
-            finally:
-                conn.close()
+                return row[0]["id"]
+            cur = conn.execute(
+                "INSERT INTO campaigns (name,description,language,active) VALUES (?,?,?,?)",
+                (name, description, language, 1 if active else 0)
+            )
+            conn.commit()
+            return cur.lastrowid
 
     def upsert_variant(self, campaign_id, variant_key, text_fr=None, text_en=None,
                        text_ar=None, cta=None, weight=1, bg_color=None,
                        post_type="text_image"):
         with self._lock:
             conn = self._connect()
-            try:
-                row = self._query_conn(
-                    conn,
-                    "SELECT id FROM campaign_variants WHERE campaign_id=? AND variant_key=?",
-                    (campaign_id, variant_key)
-                )
-                if row:
-                    conn.execute(
-                        "UPDATE campaign_variants SET text_fr=?,text_en=?,text_ar=?,"
-                        "cta=?,weight=?,bg_color=?,post_type=? WHERE id=?",
-                        (text_fr, text_en, text_ar, cta, weight, bg_color, post_type, row[0]["id"])
-                    )
-                    conn.commit()
-                    return row[0]["id"]
-                cur = conn.execute(
-                    "INSERT INTO campaign_variants"
-                    " (campaign_id,variant_key,text_fr,text_en,text_ar,cta,weight,bg_color,post_type)"
-                    " VALUES (?,?,?,?,?,?,?,?,?)",
-                    (campaign_id, variant_key, text_fr, text_en, text_ar,
-                     cta, weight, bg_color, post_type)
+            row = self._query_conn(
+                conn,
+                "SELECT id FROM campaign_variants WHERE campaign_id=? AND variant_key=?",
+                (campaign_id, variant_key)
+            )
+            if row:
+                conn.execute(
+                    "UPDATE campaign_variants SET text_fr=?,text_en=?,text_ar=?,"
+                    "cta=?,weight=?,bg_color=?,post_type=? WHERE id=?",
+                    (text_fr, text_en, text_ar, cta, weight, bg_color, post_type, row[0]["id"])
                 )
                 conn.commit()
-                return cur.lastrowid
-            finally:
-                conn.close()
+                return row[0]["id"]
+            cur = conn.execute(
+                "INSERT INTO campaign_variants"
+                " (campaign_id,variant_key,text_fr,text_en,text_ar,cta,weight,bg_color,post_type)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (campaign_id, variant_key, text_fr, text_en, text_ar,
+                 cta, weight, bg_color, post_type)
+            )
+            conn.commit()
+            return cur.lastrowid
 
     def get_campaign_by_name(self, name):
         return self._query_one("SELECT * FROM campaigns WHERE name=? AND active=1", (name,))
@@ -1121,50 +1131,47 @@ class BONDatabase:
 
         with self._lock:
             conn = self._connect()
-            try:
-                group_id = self._resolve_group_id_conn(conn, group_url)
-                cur = conn.execute(
-                    """INSERT INTO publications
-                       (robot_name,account_id,group_id,campaign_name,variant_id,
-                        text_content,images,bg_color,post_type,
-                        status,error_message,screenshot_path,published_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (robot_name, account_id, group_id, campaign_name, variant_id,
-                     (post_content or "")[:500], images_json, bg_color, post_type,
-                     status, error_message, screenshot_path,
-                     now if status == "success" else None)
+            group_id = self._resolve_group_id_conn(conn, group_url)
+            cur = conn.execute(
+                """INSERT INTO publications
+                   (robot_name,account_id,group_id,campaign_name,variant_id,
+                    text_content,images,bg_color,post_type,
+                    status,error_message,screenshot_path,published_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (robot_name, account_id, group_id, campaign_name, variant_id,
+                 (post_content or "")[:500], images_json, bg_color, post_type,
+                 status, error_message, screenshot_path,
+                 now if status == "success" else None)
+            )
+            pub_id = cur.lastrowid
+            if status == "success":
+                conn.execute(
+                    "UPDATE groups SET successful_posts=successful_posts+1,"
+                    "total_posts=total_posts+1,last_post_date=? WHERE id=?",
+                    (now, group_id)
                 )
-                pub_id = cur.lastrowid
-                if status == "success":
-                    conn.execute(
-                        "UPDATE groups SET successful_posts=successful_posts+1,"
-                        "total_posts=total_posts+1,last_post_date=? WHERE id=?",
-                        (now, group_id)
-                    )
-                    conn.execute(
-                        "UPDATE accounts SET successful_posts=successful_posts+1,"
-                        "total_posts=total_posts+1,consecutive_failures=0,"
-                        "health_score=MIN(100,health_score+2),"
-                        "last_post_date=?,last_activity_date=?,updated_at=? WHERE id=?",
-                        (now, now, now, account_id)
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE groups SET failed_posts=failed_posts+1,"
-                        "total_posts=total_posts+1 WHERE id=?", (group_id,)
-                    )
-                    conn.execute(
-                        "UPDATE accounts SET failed_posts=failed_posts+1,"
-                        "total_posts=total_posts+1,"
-                        "consecutive_failures=consecutive_failures+1,"
-                        "health_score=MAX(0,health_score-5),"
-                        "last_activity_date=?,updated_at=? WHERE id=?",
-                        (now, now, account_id)
-                    )
-                conn.commit()
-                return pub_id
-            finally:
-                conn.close()
+                conn.execute(
+                    "UPDATE accounts SET successful_posts=successful_posts+1,"
+                    "total_posts=total_posts+1,consecutive_failures=0,"
+                    "health_score=MIN(100,health_score+2),"
+                    "last_post_date=?,last_activity_date=?,updated_at=? WHERE id=?",
+                    (now, now, now, account_id)
+                )
+            else:
+                conn.execute(
+                    "UPDATE groups SET failed_posts=failed_posts+1,"
+                    "total_posts=total_posts+1 WHERE id=?", (group_id,)
+                )
+                conn.execute(
+                    "UPDATE accounts SET failed_posts=failed_posts+1,"
+                    "total_posts=total_posts+1,"
+                    "consecutive_failures=consecutive_failures+1,"
+                    "health_score=MAX(0,health_score-5),"
+                    "last_activity_date=?,updated_at=? WHERE id=?",
+                    (now, now, account_id)
+                )
+            conn.commit()
+            return pub_id
 
     def get_publications(self, robot_name=None, group_url=None, limit=50):
         where, params = ["1=1"], []
@@ -1191,17 +1198,14 @@ class BONDatabase:
         )
         with self._lock:
             conn = self._connect()
-            try:
-                gid = self._resolve_group_id_conn(conn, group_url) if group_url else None
-                conn.execute(
-                    "INSERT INTO published_comments"
-                    " (robot_name,account_id,group_id,publication_id,comment_text)"
-                    " VALUES (?,?,?,?,?)",
-                    (robot_name, account_id, gid, publication_id, comment_text)
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            gid = self._resolve_group_id_conn(conn, group_url) if group_url else None
+            conn.execute(
+                "INSERT INTO published_comments"
+                " (robot_name,account_id,group_id,publication_id,comment_text)"
+                " VALUES (?,?,?,?,?)",
+                (robot_name, account_id, gid, publication_id, comment_text)
+            )
+            conn.commit()
 
     # ══════════════════════════════════════════
     # ERRORS
@@ -1214,19 +1218,16 @@ class BONDatabase:
         account_id = self._resolve_account_id(account_name) if account_name else None
         with self._lock:
             conn = self._connect()
-            try:
-                gid = self._resolve_group_id_conn(conn, group_url) if group_url else None
-                conn.execute(
-                    "INSERT INTO errors"
-                    " (robot_name,account_id,group_id,error_type,error_message,"
-                    "  step,selector_key,screenshot_path,html_snapshot_path)"
-                    " VALUES (?,?,?,?,?,?,?,?,?)",
-                    (robot_name, account_id, gid, error_type, error_message,
-                     step, selector_key, screenshot_path, html_snapshot_path)
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            gid = self._resolve_group_id_conn(conn, group_url) if group_url else None
+            conn.execute(
+                "INSERT INTO errors"
+                " (robot_name,account_id,group_id,error_type,error_message,"
+                "  step,selector_key,screenshot_path,html_snapshot_path)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (robot_name, account_id, gid, error_type, error_message,
+                 step, selector_key, screenshot_path, html_snapshot_path)
+            )
+            conn.commit()
 
     def get_recent_errors(self, limit=20):
         return self._query(
@@ -1244,16 +1245,13 @@ class BONDatabase:
         account_id = robot["account_id"]
         with self._lock:
             conn = self._connect()
-            try:
-                gid = self._resolve_group_id_conn(conn, group_url)
-                conn.execute(
-                    "INSERT OR REPLACE INTO subscriptions"
-                    " (account_id,group_id,status,subscribed_at) VALUES (?,?,'subscribed',?)",
-                    (account_id, gid, datetime.now().isoformat())
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            gid = self._resolve_group_id_conn(conn, group_url)
+            conn.execute(
+                "INSERT OR REPLACE INTO subscriptions"
+                " (account_id,group_id,status,subscribed_at) VALUES (?,?,'subscribed',?)",
+                (account_id, gid, datetime.now().isoformat())
+            )
+            conn.commit()
 
     def is_subscribed(self, robot_name, group_url) -> bool:
         robot = self.get_robot(robot_name)
@@ -1448,25 +1446,19 @@ class BONDatabase:
     def scheduler_delete_job(self, job_id: str) -> bool:
         with self._lock:
             conn = self._connect()
-            try:
-                cur = conn.execute("DELETE FROM scheduler_jobs WHERE job_id=?", (job_id,))
-                conn.commit()
-                return cur.rowcount > 0
-            finally:
-                conn.close()
+            cur = conn.execute("DELETE FROM scheduler_jobs WHERE job_id=?", (job_id,))
+            conn.commit()
+            return cur.rowcount > 0
 
     def scheduler_set_active(self, job_id: str, active: int) -> bool:
         with self._lock:
             conn = self._connect()
-            try:
-                cur = conn.execute(
-                    "UPDATE scheduler_jobs SET active=? WHERE job_id=?",
-                    (active, job_id)
-                )
-                conn.commit()
-                return cur.rowcount > 0
-            finally:
-                conn.close()
+            cur = conn.execute(
+                "UPDATE scheduler_jobs SET active=? WHERE job_id=?",
+                (active, job_id)
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
     def scheduler_update_run_meta(
         self, job_id: str, last_run_at: str, next_run_at: Optional[str] = None
@@ -1486,22 +1478,44 @@ class BONDatabase:
     # EXPORT / PAGINATION PUBLICATIONS (v11)
     # ══════════════════════════════════════════
 
-    def _publication_export_rows(self, robot_name: Optional[str] = None) -> List[Dict]:
-        sql = """SELECT p.id, p.robot_name, a.name AS account, g.url AS group_url,
+    def _publication_export_rows(
+        self,
+        robot_name: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[Dict]:
+        """Lignes brutes pour les exports CSV/XLSX avec filtres optionnels."""
+        sql_base = """SELECT p.id, p.robot_name, a.name AS account, g.url AS group_url,
                         g.name AS group_name, p.campaign_name, p.variant_id, p.post_type,
                         p.status, p.text_content, p.created_at, p.published_at,
                         p.error_message
                  FROM publications p
                  JOIN accounts a ON a.id = p.account_id
-                 JOIN groups g ON g.id = p.group_id """
+                 JOIN groups g ON g.id = p.group_id"""
+        conditions = []
+        params: list = []
         if robot_name:
-            return self._query(sql + " WHERE p.robot_name = ? ORDER BY p.created_at DESC", (robot_name,))
-        return self._query(sql + " ORDER BY p.created_at DESC")
+            conditions.append("p.robot_name = ?")
+            params.append(robot_name)
+        if date_from:
+            conditions.append("p.created_at >= ?")
+            params.append(date_from)
+        if date_to:
+            date_to_end = date_to if "T" in date_to else date_to + "T23:59:59"
+            conditions.append("p.created_at <= ?")
+            params.append(date_to_end)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        return self._query(sql_base + where + " ORDER BY p.created_at DESC", tuple(params))
 
     def export_publications_csv(
-        self, out_path, robot_name: Optional[str] = None, encoding: str = "utf-8"
+        self,
+        out_path,
+        robot_name: Optional[str] = None,
+        encoding: str = "utf-8",
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> int:
-        rows = self._publication_export_rows(robot_name)
+        rows = self._publication_export_rows(robot_name, date_from=date_from, date_to=date_to)
         path = pathlib.Path(out_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         # CSV historique : sous-ensemble stable pour Excel / outils tiers
@@ -1517,9 +1531,13 @@ class BONDatabase:
         return len(rows)
 
     def export_publications_xlsx(
-        self, out_path, robot_name: Optional[str] = None
+        self,
+        out_path,
+        robot_name: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> int:
-        """Export enrichi (colonnes complètes). Nécessite : pip install openpyxl"""
+        """Export enrichi (colonnes completes). Necessite : pip install openpyxl"""
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Alignment, Font, PatternFill
@@ -1527,7 +1545,7 @@ class BONDatabase:
         except ImportError as e:
             raise ImportError("Installez openpyxl : pip install openpyxl") from e
 
-        rows = self._publication_export_rows(robot_name)
+        rows = self._publication_export_rows(robot_name, date_from=date_from, date_to=date_to)
         headers = [
             "id", "robot_name", "account", "group_url", "group_name",
             "campaign_name", "variant_id", "post_type", "status",
@@ -1562,21 +1580,43 @@ class BONDatabase:
         return len(rows)
 
     def get_publications_paginated(
-        self, limit: int = 50, offset: int = 0, robot_name: Optional[str] = None
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        robot_name: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> List[Dict]:
+        """Retourne les publications paginées avec filtres optionnels.
+
+        Args:
+            limit: Nombre max de résultats (max 500).
+            offset: Décalage pour la pagination.
+            robot_name: Filtre par robot (None = tous les robots).
+            date_from: Filtre date début ISO 8601, ex. '2026-01-01' (inclus).
+            date_to: Filtre date fin ISO 8601, ex. '2026-03-31' (inclus jusqu'à 23:59:59).
+        """
+        conditions = []
+        params: list = []
         if robot_name:
-            return self._query(
-                """SELECT p.*, g.url AS group_url FROM publications p
-                   JOIN groups g ON g.id = p.group_id
-                   WHERE p.robot_name = ?
-                   ORDER BY p.created_at DESC LIMIT ? OFFSET ?""",
-                (robot_name, limit, offset)
-            )
+            conditions.append("p.robot_name = ?")
+            params.append(robot_name)
+        if date_from:
+            conditions.append("p.created_at >= ?")
+            params.append(date_from)
+        if date_to:
+            # Inclut toute la journée de date_to
+            date_to_end = date_to if "T" in date_to else date_to + "T23:59:59"
+            conditions.append("p.created_at <= ?")
+            params.append(date_to_end)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.extend([limit, offset])
         return self._query(
-            """SELECT p.*, g.url AS group_url FROM publications p
+            f"""SELECT p.*, g.url AS group_url FROM publications p
                JOIN groups g ON g.id = p.group_id
+               {where}
                ORDER BY p.created_at DESC LIMIT ? OFFSET ?""",
-            (limit, offset)
+            tuple(params)
         )
 
     # ══════════════════════════════════════════
@@ -1660,14 +1700,38 @@ class BONDatabase:
 
 # ── Singleton thread-safe ─────────────────────────────────────────────────────
 
-_db_instance = None
+_db_instance: Optional[BONDatabase] = None
 _db_lock = threading.Lock()
 
 
 def get_database() -> BONDatabase:
+    """Retourne l'instance singleton de BONDatabase (creation lazy, thread-safe)."""
     global _db_instance
     if _db_instance is None:
         with _db_lock:
             if _db_instance is None:
                 _db_instance = BONDatabase()
     return _db_instance
+
+
+def reset_database(new_instance: Optional[BONDatabase] = None) -> None:
+    """Remplace le singleton — USAGE TESTS UNIQUEMENT.
+
+    Ferme proprement l'ancienne connexion avant le remplacement.
+    Appelable avec None pour forcer la recreation au prochain get_database().
+
+    Exemple dans les tests :
+        db = BONDatabase(":memory:")
+        reset_database(db)
+        yield db
+        reset_database()     # remet a None
+        db.close()           # libere le descripteur
+    """
+    global _db_instance
+    with _db_lock:
+        if _db_instance is not None:
+            try:
+                _db_instance.close()
+            except Exception:
+                pass
+        _db_instance = new_instance

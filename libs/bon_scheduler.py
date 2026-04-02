@@ -1,5 +1,5 @@
 """
-bon_scheduler.py v11 — Planification cron par robot (APScheduler + persistance SQLite).
+bon_scheduler.py v12 — Planification cron par robot (APScheduler + persistance SQLite).
 
 Usage :
   python -m bon schedule add --robot r1 --cron "0 8 * * *"
@@ -17,7 +17,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def _main_py_argv(*args: str) -> List[str]:
-    return [sys.executable, str(REPO_ROOT / "__main__.py"), *args]
+    return [sys.executable, "-m", "bon", *args]
 
 
 def _run_robot_command(robot_name: str, command_name: str = "post") -> None:
@@ -105,7 +105,9 @@ def run_daemon_scheduler(blocking: bool = True) -> None:
         from apscheduler.schedulers.blocking import BlockingScheduler
         from apscheduler.schedulers.background import BackgroundScheduler
     except ImportError as e:
-        raise RuntimeError("Installez apscheduler : pip install apscheduler") from e
+        raise RuntimeError(
+            "apscheduler manquant. Installez avec : pip install apscheduler>=3.10.0"
+        ) from e
 
     from libs.database import get_database
 

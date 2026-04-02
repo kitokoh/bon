@@ -66,46 +66,48 @@ class TestResolveMediaPath:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TEST 2 — DEFAULT_SESSION_CONFIG
+# TEST 2 — DEFAULT_ROBOT_CONFIG (v11 — remplace DEFAULT_SESSION_CONFIG v8)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestDefaultSessionConfig:
+class TestDefaultRobotConfig:
     REQUIRED_FIELDS = [
-        "session_name", "storage_state", "max_groups_per_run",
-        "delay_between_groups", "max_runs_per_day", "cooldown_between_runs_s",
-        "last_run_ts", "run_count_today", "posts", "groups",
-        "add_comments", "comments", "marketplace", "last_run_date",
-        "max_groups_per_hour", "proxy", "locale", "timezone_id",
+        "max_groups_per_run", "max_groups_per_hour", "delay_between_groups",
+        "max_runs_per_day", "cooldown_between_runs_s",
+        "locale", "timezone_id", "platform", "proxy",
+        "telegram_token", "telegram_chat_id",
     ]
 
     def _get_config(self):
-        from libs.session_manager import DEFAULT_SESSION_CONFIG
-        return DEFAULT_SESSION_CONFIG
+        from libs.robot_manager import DEFAULT_ROBOT_CONFIG
+        return DEFAULT_ROBOT_CONFIG
 
     def test_all_required_fields_present(self):
         config = self._get_config()
         missing = [f for f in self.REQUIRED_FIELDS if f not in config]
         assert not missing, f"Champs manquants : {missing}"
 
-    def test_add_comments_default_false(self):
-        assert self._get_config()["add_comments"] is False
-
-    def test_marketplace_default_empty_dict(self):
-        assert isinstance(self._get_config()["marketplace"], dict)
-
-    def test_cooldown_default_7200(self):
-        assert self._get_config()["cooldown_between_runs_s"] == 7200
+    def test_delay_between_groups_is_list(self):
+        cfg = self._get_config()
+        assert isinstance(cfg["delay_between_groups"], list)
+        assert len(cfg["delay_between_groups"]) == 2
 
     def test_proxy_default_none(self):
         assert self._get_config()["proxy"] is None
 
+    def test_cooldown_default_7200(self):
+        assert self._get_config()["cooldown_between_runs_s"] == 7200
+
     def test_locale_default_fr(self):
-        assert "locale" in self._get_config()
+        assert self._get_config()["locale"] == "fr-FR"
 
     def test_max_groups_per_hour_default(self):
         cfg = self._get_config()
-        assert "max_groups_per_hour" in cfg
         assert isinstance(cfg["max_groups_per_hour"], int)
+        assert cfg["max_groups_per_hour"] > 0
+
+
+# Alias conservé pour ne pas casser d'éventuels imports externes
+TestDefaultSessionConfig = TestDefaultRobotConfig
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

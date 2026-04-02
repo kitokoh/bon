@@ -86,11 +86,12 @@ def main():
         print(f"       {VENV_DIR}\\Scripts\\activate")
     else:
         print(f"       source {VENV_DIR}/bin/activate")
-    print(f"  2. Créez votre première session :")
-    print(f"       python -m bon login --session <nom_du_compte>")
+    print(f"  2. Créez votre premier robot (ouvre un navigateur pour login Facebook) :")
+    print(f"       python -m bon robot create --robot robot1")
     print(f"  3. Lancez la publication :")
-    print(f"       python -m bon post --session <nom_du_compte>")
-    print(f"\n  Pour lister les sessions : python -m bon list-sessions")
+    print(f"       python -m bon post --robot robot1 --headless")
+    print(f"\n  Pour lister les robots : python -m bon robot list")
+    print(f"  Pour le dashboard     : python -m bon dashboard")
 
 
 if __name__ == "__main__":

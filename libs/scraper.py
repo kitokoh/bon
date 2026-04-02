@@ -268,7 +268,8 @@ class Scraper:
             if db.was_published_recently(self.robot_name, group_url, hours=24,
                                           campaign_name=camp_name,
                                           variant_id=variant["variant_key"]):
-cu                     robot=self.robot_name, group=group_url[:60])
+                emit("INFO", "ALREADY_PUBLISHED",
+                     robot=self.robot_name, group=group_url[:60])
                 skipped_count += 1
                 continue
 

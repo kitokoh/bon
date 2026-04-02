@@ -1,8 +1,13 @@
 """
-captcha_solver.py v11 — Intégration 2captcha.com (HTTP, sans dépendance SDK).
+captcha_solver.py v12 — Intégration 2captcha.com (HTTP, sans dépendance SDK).
 
-Variables :
-  BON_2CAPTCHA_KEY  — clé API 2captcha
+Priorité de résolution de la clé API (du plus spécifique au plus général) :
+  1. Paramètre api_key passé directement à CaptchaSolver()
+  2. robots.captcha_api_key en DB pour le robot courant
+  3. Variable d'environnement BON_2CAPTCHA_KEY (fallback global)
+
+Cela permet à chaque robot d'avoir son propre compte 2captcha,
+ou de désactiver la résolution auto pour des robots spécifiques (captcha_api_key=NULL).
 """
 from __future__ import annotations
 
@@ -21,11 +26,32 @@ class CaptchaSolverError(Exception):
     pass
 
 
+def _get_robot_captcha_key(robot_name: Optional[str]) -> Optional[str]:
+    """Lit captcha_api_key depuis la DB pour ce robot. Retourne None si absent."""
+    if not robot_name:
+        return None
+    try:
+        from libs.database import get_database
+        robot = get_database().get_robot(robot_name)
+        if robot and robot.get("captcha_api_key"):
+            return str(robot["captcha_api_key"]).strip() or None
+    except Exception:
+        pass
+    return None
+
+
 class CaptchaSolver:
     """Client minimal 2captcha (image, reCAPTCHA v2, hCaptcha)."""
 
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = (api_key or os.environ.get("BON_2CAPTCHA_KEY", "")).strip()
+    def __init__(self, api_key: Optional[str] = None, robot_name: Optional[str] = None):
+        # Priorité : paramètre direct > clé robot en DB > variable d'environnement globale
+        resolved = (
+            api_key
+            or _get_robot_captcha_key(robot_name)
+            or os.environ.get("BON_2CAPTCHA_KEY", "")
+        )
+        self.api_key = (resolved or "").strip()
+        self.robot_name = robot_name
 
     def configured(self) -> bool:
         return bool(self.api_key)
@@ -228,9 +254,9 @@ def try_auto_solve_recaptcha(page, robot_name: Optional[str] = None) -> bool:
         "1", "true", "yes", "on",
     ):
         return False
-    solver = CaptchaSolver()
+    solver = CaptchaSolver(robot_name=robot_name)
     if not solver.configured():
-        _log_captcha_db(robot_name, "recaptcha_v2", "skipped", "BON_2CAPTCHA_KEY manquant")
+        _log_captcha_db(robot_name, "recaptcha_v2", "skipped", "Aucune cle 2captcha (DB ni BON_2CAPTCHA_KEY)")
         return False
     sitekey = extract_recaptcha_sitekey(page)
     if not sitekey:
@@ -258,9 +284,9 @@ def try_auto_solve_hcaptcha(page, robot_name: Optional[str] = None) -> bool:
         "1", "true", "yes", "on",
     ):
         return False
-    solver = CaptchaSolver()
+    solver = CaptchaSolver(robot_name=robot_name)
     if not solver.configured():
-        _log_captcha_db(robot_name, "hcaptcha", "skipped", "BON_2CAPTCHA_KEY manquant")
+        _log_captcha_db(robot_name, "hcaptcha", "skipped", "Aucune cle 2captcha (DB ni BON_2CAPTCHA_KEY)")
         return False
     sitekey = extract_hcaptcha_sitekey(page)
     if not sitekey:

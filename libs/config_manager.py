@@ -51,12 +51,12 @@ def save_json(path: pathlib.Path, data: dict) -> bool:
 
 
 def list_sessions() -> list:
-    """Liste les sessions (depuis DB en priorité)."""
+    """Liste les robots/sessions (depuis DB en priorité, fallback fichiers state)."""
     try:
         from libs.database import get_database
         return get_database().list_sessions()
     except Exception:
-        return [p.stem.replace("_state","") for p in SESSIONS_DIR.glob("*_state.json")]
+        return sorted([p.stem.replace("_state", "") for p in SESSIONS_DIR.glob("*_state.json")])
 
 
 def get_session_config_path(session_name: str) -> pathlib.Path:
