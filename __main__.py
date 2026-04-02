@@ -7,6 +7,7 @@ Commandes principales :
   python -m bon post --robot <nom> [--headless] [--validate-proxy]
   python -m bon export --out fichier.csv [--robot <nom>]
   python -m bon captcha test
+  (optionnel) BON_AUTO_SOLVE_CAPTCHA=1 — résolution reCAPTCHA/hCaptcha via 2captcha dans le flux navigateur
   python -m bon schedule add|list|remove|daemon ...
   python -m bon api --host 127.0.0.1 --port 8765
   python -m bon config set|get <clé> [valeur]
@@ -128,9 +129,15 @@ def parse_args():
     sub.add_parser("dashboard")
     sub.add_parser("update-ua", help="Mettre à jour le pool User-Agents (Chrome)")
 
-    ex = sub.add_parser("export", help="Exporter les publications en CSV")
-    ex.add_argument("--out", required=True)
+    ex = sub.add_parser("export", help="Exporter les publications (CSV ou XLSX)")
+    ex.add_argument("--out", required=True, help="Fichier .csv ou .xlsx")
     ex.add_argument("--robot", default=None)
+    ex.add_argument(
+        "--format",
+        choices=("csv", "xlsx"),
+        default=None,
+        help="Par défaut : déduit de l’extension du fichier",
+    )
 
     cap = sub.add_parser("captcha", help="2captcha (clé BON_2CAPTCHA_KEY)")
     cap_sub = cap.add_subparsers(dest="captcha_cmd")
@@ -522,7 +529,18 @@ def cmd_update_ua():
 
 def cmd_export(args):
     db = get_database()
-    n = db.export_publications_csv(args.out, robot_name=args.robot)
+    fmt = args.format
+    if fmt is None:
+        low = args.out.lower()
+        fmt = "xlsx" if low.endswith(".xlsx") else "csv"
+    if fmt == "csv":
+        n = db.export_publications_csv(args.out, robot_name=args.robot)
+    else:
+        try:
+            n = db.export_publications_xlsx(args.out, robot_name=args.robot)
+        except ImportError as e:
+            print(f"✗ {e}")
+            sys.exit(1)
     print(f"✓ {n} ligne(s) → {args.out}")
 
 

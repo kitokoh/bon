@@ -6,14 +6,19 @@
 - **CDN sélecteurs** : plus d’URL GitHub fictive ; `BON_USE_CDN=1` + `BON_SELECTORS_CDN_URL` ou `config set selectors_cdn_url` ; cache TTL `BON_SELECTORS_CACHE_TTL_S`.
 - **Proxy CLI** : `robot create --proxy-server …`, `robot config set|show|clear-proxy`, `post --validate-proxy`, login création avec proxy contexte Playwright.
 - **Export CSV** : `python -m bon export --out … [--robot …]` + pagination DB `get_publications_paginated`.
-- **2captcha** : `libs/captcha_solver.py`, `python -m bon captcha test`, journal `captcha_solve_log`.
+- **2captcha** : `libs/captcha_solver.py`, `python -m bon captcha test`, journal `captcha_solve_log` ; résolution auto optionnelle dans `check_page_state` si `BON_AUTO_SOLVE_CAPTCHA=1` + `BON_2CAPTCHA_KEY`.
 - **Scheduler** : table `scheduler_jobs`, `schedule add|list|remove|daemon` (APScheduler).
 - **API REST** : `python -m bon api` — Flask, `BON_API_TOKEN`, `/v1/*` (robots, dashboard, publications, run).
 - **Cross-robot variants** : `BON_CROSS_ROBOT_VARIANT_EXCLUSION=1` + `pick_variant(..., exclude_cross_robot=True)`.
 - **Tests** : `tests/test_v10.py` (ex-v9), `tests/test_v11.py`.
 
 ### Suite possible (v12)
-- Tests E2E DOM synthétique, dashboard web complet, adaptateur PostgreSQL.
+- Tests E2E DOM synthétique, dashboard web complet, adaptateur PostgreSQL, `robot config` étendu, `/metrics`, multi-provider CAPTCHA.
+
+### Synthèse audit (`BON_Audit_v11.pdf`) ↔ dépôt
+L’audit décrit une cible « plateforme 24/7 » très proche de cette base. **Écarts documentés** : pas de SDK `2captcha-python` (HTTP natif), pas de colonnes `captcha_*` par robot (clé globale `BON_2CAPTCHA_KEY`), CDN **opt-in** (pas d’URL GitHub imposée), scheduler sous **`schedule daemon`** (pas `schedule start`). **Renforts dépôt** : alias API `/api/v1/*`, export **XLSX** (`openpyxl`), endpoints **campaigns**, **groups**, **errors**, **publications/export**.
+
+**Plan d’action détaillé** : [docs/PLAN_ACTION_V12.md](docs/PLAN_ACTION_V12.md).
 
 ---
 
@@ -79,33 +84,19 @@
 
 ---
 
-## 🔄 En cours / Backlog v10
+## Backlog historique (référence) — items v10 largement couverts en v11
 
-### Priorité HAUTE
-
-| ID | Feature | Effort | Critère succès |
-|----|---------|--------|----------------|
-| P1 | CDN sélecteurs activé (GitHub Releases) | 1 semaine | BON_SELECTORS_CDN_URL configuré en prod |
-| P2 | Proxies résidentiels par robot | 2 semaines | 1 proxy par robot, champs proxy_host/port/user/pass |
-| P3 | Tests E2E DOM synthétique | 3 semaines | Flux post, session expirée, stealth testés |
-| P4 | Résolution CAPTCHA auto (2captcha) | 1 semaine | 95%+ CAPTCHA résolus sans intervention |
-
-### Priorité NORMALE
-
-| ID | Feature | Effort | Notes |
-|----|---------|--------|-------|
-| K1 | Scheduler APScheduler | 2 semaines | `python -m bon schedule --robot r1 --cron "0 8 * * *"` |
-| K2 | Dashboard Flask/FastAPI | 5 semaines | Health scores, CB states, graphes 7j |
-| K3 | Export CSV/Excel publications | 1 semaine | openpyxl (déjà installé) |
-| K4 | API REST légère | 4 semaines | GET /robots, POST /robots/{n}/run, auth par token |
-
-### Priorité FUTURE (v11)
-
-| ID | Feature | Effort | Notes |
-|----|---------|--------|-------|
-| F1 | PostgreSQL optionnel | 4 semaines | DatabaseAdapter SQLite/PG, BON_DB_URL |
-| F2 | Interface web React | 15 semaines | Dashboard complet, gestion robots |
-| F3 | Rotation campagnes cross-robots | 2 semaines | Éviter même variant même groupe entre robots |
+| ID | Thème | Statut v11 |
+|----|--------|----------------|
+| P1 | CDN sélecteurs | Fait (URL explicite, pas de repo fictif) |
+| P2 | Proxy par robot | Fait (CLI + DB + validation optionnelle) |
+| P3 | Tests E2E DOM | **À faire** (v12) |
+| P4 | CAPTCHA 2captcha | Fait (client + journal + **auto** si `BON_AUTO_SOLVE_CAPTCHA=1`) |
+| K1 | Scheduler | Fait (`schedule add` / `daemon`) |
+| K2 | Dashboard web | Partiel (API REST + CLI `dashboard` ; pas de graphes 7j) |
+| K3 | Export CSV | Fait (`bon export`) |
+| K4 | API REST | Fait (`bon api`, Bearer token) |
+| F3 | Cross-robots variants | Fait (`BON_CROSS_ROBOT_VARIANT_EXCLUSION`) |
 
 ---
 
@@ -118,5 +109,6 @@
 | v8 | 95/100 | Tout-SQL |
 | v9 | 95/100 | Modèle Robot + factories |
 | v10 | **96/100** | UA à jour + bug Telegram + rotation variants |
+| **v11** | **97/100** | Proxy + CDN explicite + export + scheduler + API + CAPTCHA auto optionnel |
 
-**Objectif v11 : 9.5/10** — CDN actif + proxies + tests E2E
+**Objectif v12** — Tests E2E DOM + dashboard web enrichi + PostgreSQL optionnel

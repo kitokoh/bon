@@ -11,7 +11,7 @@ import functools
 import time
 import signal
 import sys
-from typing import Callable, Type, Tuple
+from typing import Callable, Optional, Type, Tuple
 
 try:
     from libs.log_emitter import emit
@@ -116,11 +116,15 @@ def retry(
 # Détection des états bloquants
 # ──────────────────────────────────────────────
 
-def check_page_state(page) -> None:
+def check_page_state(page, robot_name: Optional[str] = None) -> None:
     """
     Analyse l'état courant de la page Playwright et lève une exception
     appropriée si un état bloquant est détecté.
     À appeler avant chaque action importante.
+
+    robot_name : pour journal captcha / logs (optionnel).
+    Si BON_AUTO_SOLVE_CAPTCHA=1 et clé 2captcha : tentative de résolution
+    reCAPTCHA / hCaptcha avant CaptchaDetectedError.
     """
     url = page.url
 
@@ -152,11 +156,28 @@ def check_page_state(page) -> None:
     except Exception:
         pass
 
-    # 4. CAPTCHA — utiliser .count() > 0 (frame_locator() est toujours truthy)
+    # 4. CAPTCHA — reCAPTCHA puis hCaptcha
     try:
         if page.locator("iframe[src*='recaptcha']").count() > 0:
-            emit("WARN", "CAPTCHA_DETECTED", url=url)
-            raise CaptchaDetectedError("reCAPTCHA détecté sur la page")
+            from libs.captcha_solver import try_auto_solve_recaptcha
+            if try_auto_solve_recaptcha(page, robot_name=robot_name):
+                emit("SUCCESS", "RECAPTCHA_AUTO_SOLVED", url=url[:80], robot=robot_name)
+            else:
+                emit("WARN", "CAPTCHA_DETECTED", url=url, kind="recaptcha")
+                raise CaptchaDetectedError("reCAPTCHA détecté sur la page")
+    except CaptchaDetectedError:
+        raise
+    except Exception:
+        pass
+
+    try:
+        if page.locator("iframe[src*='hcaptcha']").count() > 0:
+            from libs.captcha_solver import try_auto_solve_hcaptcha
+            if try_auto_solve_hcaptcha(page, robot_name=robot_name):
+                emit("SUCCESS", "HCAPTCHA_AUTO_SOLVED", url=url[:80], robot=robot_name)
+            else:
+                emit("WARN", "CAPTCHA_DETECTED", url=url, kind="hcaptcha")
+                raise CaptchaDetectedError("hCaptcha détecté sur la page")
     except CaptchaDetectedError:
         raise
     except Exception:

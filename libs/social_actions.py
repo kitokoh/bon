@@ -158,7 +158,7 @@ class SocialActions:
         if not self.engine.navigate(page, group_url):
             return False
         human_delay(2.0, 0.5)
-        check_page_state(page)
+        check_page_state(page, robot_name=self.scraper.robot_name)
 
         # Vérifier si déjà membre
         for sel in SEL_ALREADY_MEMBER:
@@ -213,7 +213,7 @@ class SocialActions:
         if not self.engine.navigate(page, target_url):
             return False
         human_delay(2.0, 0.5)
-        check_page_state(page)
+        check_page_state(page, robot_name=self.scraper.robot_name)
         self.simulate_natural_browse(page, duration_s=random.uniform(3, 6))
 
         for sel in SEL_COMMENT_INPUT:
@@ -259,7 +259,7 @@ class SocialActions:
                 if not self.engine.navigate(page, url):
                     continue
                 human_delay(2.0, 1.0)
-                check_page_state(page)
+                check_page_state(page, robot_name=self.scraper.robot_name)
                 self.simulate_natural_browse(page, duration_s=random.uniform(5, 12))
 
                 post_urls = self._find_post_links(page)
@@ -352,7 +352,7 @@ class SocialActions:
         if not self.engine.navigate(page, target_profile_url):
             return False
         human_delay(2.0, 0.5)
-        check_page_state(page)
+        check_page_state(page, robot_name=self.scraper.robot_name)
         self.simulate_natural_browse(page, duration_s=2.0)
 
         # Trouver et cliquer sur "Message"

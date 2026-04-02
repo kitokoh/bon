@@ -1486,33 +1486,25 @@ class BONDatabase:
     # EXPORT / PAGINATION PUBLICATIONS (v11)
     # ══════════════════════════════════════════
 
+    def _publication_export_rows(self, robot_name: Optional[str] = None) -> List[Dict]:
+        sql = """SELECT p.id, p.robot_name, a.name AS account, g.url AS group_url,
+                        g.name AS group_name, p.campaign_name, p.variant_id, p.post_type,
+                        p.status, p.text_content, p.created_at, p.published_at,
+                        p.error_message
+                 FROM publications p
+                 JOIN accounts a ON a.id = p.account_id
+                 JOIN groups g ON g.id = p.group_id """
+        if robot_name:
+            return self._query(sql + " WHERE p.robot_name = ? ORDER BY p.created_at DESC", (robot_name,))
+        return self._query(sql + " ORDER BY p.created_at DESC")
+
     def export_publications_csv(
         self, out_path, robot_name: Optional[str] = None, encoding: str = "utf-8"
     ) -> int:
-        if robot_name:
-            rows = self._query(
-                """SELECT p.id, p.robot_name, a.name AS account, g.url AS group_url,
-                          p.campaign_name, p.variant_id, p.status, p.created_at,
-                          p.error_message
-                   FROM publications p
-                   JOIN accounts a ON a.id = p.account_id
-                   JOIN groups g ON g.id = p.group_id
-                   WHERE p.robot_name = ?
-                   ORDER BY p.created_at DESC""",
-                (robot_name,)
-            )
-        else:
-            rows = self._query(
-                """SELECT p.id, p.robot_name, a.name AS account, g.url AS group_url,
-                          p.campaign_name, p.variant_id, p.status, p.created_at,
-                          p.error_message
-                   FROM publications p
-                   JOIN accounts a ON a.id = p.account_id
-                   JOIN groups g ON g.id = p.group_id
-                   ORDER BY p.created_at DESC"""
-            )
+        rows = self._publication_export_rows(robot_name)
         path = pathlib.Path(out_path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        # CSV historique : sous-ensemble stable pour Excel / outils tiers
         fieldnames = [
             "id", "robot_name", "account", "group_url",
             "campaign_name", "variant_id", "status", "created_at", "error_message",
@@ -1522,6 +1514,51 @@ class BONDatabase:
             w.writeheader()
             for r in rows:
                 w.writerow(dict(r))
+        return len(rows)
+
+    def export_publications_xlsx(
+        self, out_path, robot_name: Optional[str] = None
+    ) -> int:
+        """Export enrichi (colonnes complètes). Nécessite : pip install openpyxl"""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Font, PatternFill
+            from openpyxl.utils import get_column_letter
+        except ImportError as e:
+            raise ImportError("Installez openpyxl : pip install openpyxl") from e
+
+        rows = self._publication_export_rows(robot_name)
+        headers = [
+            "id", "robot_name", "account", "group_url", "group_name",
+            "campaign_name", "variant_id", "post_type", "status",
+            "text_content", "created_at", "published_at", "error_message",
+        ]
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "publications"
+        hdr_fill = PatternFill("solid", fgColor="1877F2")
+        hdr_font = Font(bold=True, color="FFFFFF")
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.fill = hdr_fill
+            cell.font = hdr_font
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        for ri, row in enumerate(rows, 2):
+            d = dict(row)
+            for ci, h in enumerate(headers, 1):
+                v = d.get(h)
+                if v is not None and not isinstance(v, (int, float, bool)):
+                    v = str(v)[:32000]
+                ws.cell(row=ri, column=ci, value=v)
+        for i in range(1, len(headers) + 1):
+            ws.column_dimensions[get_column_letter(i)].width = min(28, max(12, len(headers[i - 1]) + 2))
+        ws.freeze_panes = "A2"
+        if hasattr(out_path, "write"):
+            wb.save(out_path)
+        else:
+            path = pathlib.Path(out_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            wb.save(str(path))
         return len(rows)
 
     def get_publications_paginated(

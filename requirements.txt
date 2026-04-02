@@ -1,5 +1,5 @@
-# BON — Facebook Publisher v10
-# Dépendances mises à jour avril 2026
+# BON — Facebook Publisher v11
+# Dépendances — avril 2026
 
 # Moteur navigateur
 playwright>=1.50.0
@@ -14,9 +14,10 @@ emoji>=2.14.0
 # Tests
 pytest>=8.0.0
 
-# v11 : planificateur + API REST (optionnel si vous n’utilisez que la CLI)
+# v11 : planificateur + API REST + export Excel
 apscheduler>=3.10.0
 flask>=3.0.0
+openpyxl>=3.1.0
 
 # Résolution CAPTCHA : uniquement clé API + requests (voir libs/captcha_solver.py)
 # 2captcha-python>=1.2.0

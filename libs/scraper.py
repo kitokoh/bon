@@ -268,8 +268,7 @@ class Scraper:
             if db.was_published_recently(self.robot_name, group_url, hours=24,
                                           campaign_name=camp_name,
                                           variant_id=variant["variant_key"]):
-                emit("DEBUG", "ALREADY_PUBLISHED_SKIP",
-                     robot=self.robot_name, group=group_url[:60])
+cu                     robot=self.robot_name, group=group_url[:60])
                 skipped_count += 1
                 continue
 
@@ -297,7 +296,7 @@ class Scraper:
                 if not self.engine.navigate(self._page, group_url):
                     raise Exception("Navigation échouée vers le groupe")
                 human_delay(2.0, 0.5)
-                check_page_state(self._page)
+                check_page_state(self._page, robot_name=self.robot_name)
                 check_group_accessible(self._page, group_url)
 
                 if post_type == "text_only":
@@ -632,7 +631,7 @@ class Scraper:
             return None
 
         post_publication_wait()
-        check_page_state(page)
+        check_page_state(page, robot_name=self.robot_name)
 
         pub_id = self.db.record_publication(
             robot_name=self.robot_name, group_url=group_url,
