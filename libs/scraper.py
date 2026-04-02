@@ -1,5 +1,5 @@
 """
-scraper.py v9 — Logique métier Facebook : publication, commentaires, abonnement
+scraper.py v11 — Logique métier Facebook : publication, commentaires, abonnement
 
 Nouveautés v9 :
   - Modèle Robot (robot_name remplace session_name partout)
@@ -13,6 +13,7 @@ Nouveautés v9 :
   - pick_media_for_post() : tire aléatoirement des médias pour ce robot/campagne
   - DOM-agnostic : tous les sélecteurs sont multi-variantes avec fallback progressif
 """
+import os
 import random
 import pathlib
 import time
@@ -246,8 +247,18 @@ class Scraper:
             campaign    = random.choice(campaigns)
             camp_name   = campaign["name"]
             language    = group.get("language", "fr")
-            variant     = pick_variant(db, robot_name=self.robot_name, campaign_name=camp_name,
-                              group_url=group_url, language=language, exclusion_days=30)
+            cross_excl = os.environ.get(
+                "BON_CROSS_ROBOT_VARIANT_EXCLUSION", "0"
+            ).strip().lower() in ("1", "true", "yes", "on")
+            variant = pick_variant(
+                db,
+                robot_name=self.robot_name,
+                campaign_name=camp_name,
+                group_url=group_url,
+                language=language,
+                exclusion_days=30,
+                exclude_cross_robot=cross_excl,
+            )
             if not variant:
                 emit("WARN", "NO_VARIANT", robot=self.robot_name, campaign=camp_name)
                 skipped_count += 1

@@ -22,15 +22,17 @@ except ImportError:
     from log_emitter import emit
     from config_manager import CONFIG_DIR, load_json, save_json
 
-SELECTORS_CDN_URL  = _os.environ.get("BON_SELECTORS_CDN_URL", "").strip()
-CDN_TIMEOUT        = 5
+SELECTORS_CDN_URL = _os.environ.get("BON_SELECTORS_CDN_URL", "").strip()
+CDN_TIMEOUT = int(_os.environ.get("BON_SELECTORS_CDN_TIMEOUT_S", "8"))
 SELECTORS_MAX_AGE_DAYS = int(_os.environ.get("BON_SELECTORS_MAX_AGE_DAYS", "7"))
 
-# URL GitHub Releases publique — utilisée si BON_SELECTORS_CDN_URL n'est pas défini.
-# Peut être remplacée par votre propre hébergement via la variable d'environnement.
-_GITHUB_FALLBACK_URL = (
-    "https://raw.githubusercontent.com/bon-project/bon/main/config/selectors.json"
+# v11 : pas d’URL CDN par défaut (évite un dépôt fictif). Activez explicitement :
+#   BON_USE_CDN=1  +  BON_SELECTORS_CDN_URL=https://.../selectors.json
+#   ou  python -m bon config set selectors_cdn_url <url>
+BON_USE_CDN = _os.environ.get("BON_USE_CDN", "0").strip().lower() in (
+    "1", "true", "yes", "on",
 )
+CDN_CACHE_TTL_S = int(_os.environ.get("BON_SELECTORS_CACHE_TTL_S", "3600"))
 
 # Clés obligatoires dans selectors.json pour qu'il soit considéré valide
 REQUIRED_SELECTOR_KEYS = {
@@ -45,6 +47,18 @@ class SelectorNotFound(Exception):
         self.key   = key
         self.tried = tried
         super().__init__(f"Sélecteur introuvable pour '{key}'. Essayés: {tried}")
+
+
+def _resolve_selectors_cdn_url() -> str:
+    """URL distante : env > config_kv (DB) > vide."""
+    if SELECTORS_CDN_URL:
+        return SELECTORS_CDN_URL
+    try:
+        from libs.database import get_database
+        u = (get_database().config_get("selectors_cdn_url") or "").strip()
+        return u
+    except Exception:
+        return ""
 
 
 class SelectorRegistry:
@@ -64,6 +78,8 @@ class SelectorRegistry:
         }
     }
     """
+
+    _cdn_last_attempt_ts: float = 0.0
 
     def __init__(self, selectors_path: Optional[pathlib.Path] = None):
         if selectors_path is None:
@@ -130,68 +146,68 @@ class SelectorRegistry:
             return False, "Clé 'version' absente"
         return True, "OK"
 
-    def update_from_cdn(self) -> bool:
+    def update_from_cdn(self, force: bool = False) -> bool:
         """
-        Tente de récupérer une version plus récente des sélecteurs depuis le CDN.
+        Met à jour selectors.json depuis une URL HTTPS si activé.
 
-        Logique v7 :
-          - Si BON_SELECTORS_CDN_URL est défini → utilise cette URL
-          - Sinon → essaie le fallback GitHub Releases public
-          - Vérifie l'âge du fichier local : si < SELECTORS_MAX_AGE_DAYS jours
-            ET version distante identique → pas de mise à jour (évite les requêtes inutiles)
-          - Backup automatique, validation schéma, rollback sur erreur
-
-        Returns:
-            True si mise à jour effectuée, False sinon
+        v11 :
+          - Requiert BON_USE_CDN=1 (ou équivalent) ET une URL (env ou DB config_kv).
+          - Pas d’URL publique imposée : évite les 404 sur un dépôt inexistant.
+          - Cache réseau : BON_SELECTORS_CACHE_TTL_S entre deux tentatives complètes.
         """
-        cdn_url = SELECTORS_CDN_URL or _GITHUB_FALLBACK_URL
-        if not cdn_url:
+        if not BON_USE_CDN and not force:
+            emit("DEBUG", "SELECTORS_CDN_SKIPPED",
+                 reason="BON_USE_CDN désactivé (mettre BON_USE_CDN=1 pour activer)")
             return False
 
-        # Vérification de fraîcheur : évite un appel réseau si le fichier
-        # est récent ET n'a pas forcément changé (réduction de bruit réseau)
-        if self.selectors_path.exists():
-            age_days = (
-                __import__("time").time() - self.selectors_path.stat().st_mtime
-            ) / 86400
-            if age_days < SELECTORS_MAX_AGE_DAYS:
-                emit("DEBUG", "SELECTORS_FRESH", age_days=round(age_days, 1),
+        cdn_url = _resolve_selectors_cdn_url()
+        if not cdn_url:
+            emit("INFO", "SELECTORS_CDN_NO_URL",
+                 hint="Définissez BON_SELECTORS_CDN_URL ou : python -m bon config set selectors_cdn_url <url>")
+            return False
+
+        now = __import__("time").time()
+        if (not force and SelectorRegistry._cdn_last_attempt_ts
+                and (now - SelectorRegistry._cdn_last_attempt_ts) < CDN_CACHE_TTL_S):
+            emit("DEBUG", "SELECTORS_CDN_CACHE_TTL",
+                 remaining_s=round(CDN_CACHE_TTL_S - (now - SelectorRegistry._cdn_last_attempt_ts), 0))
+            return False
+
+        # Fichier local récent : moins d’appels si version locale encore « jeune »
+        if self.selectors_path.exists() and not force:
+            age_days = (now - self.selectors_path.stat().st_mtime) / 86400
+            if age_days < SELECTORS_MAX_AGE_DAYS and age_days < 1.0:
+                emit("DEBUG", "SELECTORS_FRESH", age_days=round(age_days, 3),
                      max_age=SELECTORS_MAX_AGE_DAYS)
-                # On vérifie quand même la version distante si le fichier a moins de 1 jour
-                if age_days < 1.0:
-                    return False
+                return False
 
         try:
+            SelectorRegistry._cdn_last_attempt_ts = now
             resp = requests.get(cdn_url, timeout=CDN_TIMEOUT)
             resp.raise_for_status()
             remote = resp.json()
 
-            # 1. Valider le schéma avant tout
             valid, msg = self._validate_remote(remote)
             if not valid:
                 emit("WARN", "SELECTORS_CDN_INVALID_SCHEMA",
                      reason=msg, url=cdn_url[:60])
                 return False
 
-            # 2. Comparer les versions
-            local_version  = self._data.get("version", "0000-00")
+            local_version = self._data.get("version", "0000-00")
             remote_version = remote.get("version", "0000-00")
-            if remote_version <= local_version:
+            if not force and remote_version <= local_version:
                 emit("INFO", "SELECTORS_UP_TO_DATE", version=local_version)
                 return False
 
-            # 3. Backup du fichier local avant écrasement
             bak_path = pathlib.Path(str(self.selectors_path) + ".bak")
             if self.selectors_path.exists():
                 shutil.copy2(self.selectors_path, bak_path)
                 emit("INFO", "SELECTORS_BACKUP_CREATED", path=str(bak_path))
 
-            # 4. Écraser et recharger
             save_json(self.selectors_path, remote)
             self._data = remote
             emit("SUCCESS", "SELECTORS_UPDATED",
-                 old=local_version, new=remote_version,
-                 source="cdn" if SELECTORS_CDN_URL else "github_fallback")
+                 old=local_version, new=remote_version, source="cdn")
             return True
 
         except requests.RequestException:

@@ -14,10 +14,11 @@ emoji>=2.14.0
 # Tests
 pytest>=8.0.0
 
-# Optionnel : scheduler
-# apscheduler>=3.10.0
+# v11 : planificateur + API REST (optionnel si vous n’utilisez que la CLI)
+apscheduler>=3.10.0
+flask>=3.0.0
 
-# Optionnel : résolution CAPTCHA
+# Résolution CAPTCHA : uniquement clé API + requests (voir libs/captcha_solver.py)
 # 2captcha-python>=1.2.0
 
 # Optionnel : infos réseau (check_license)

@@ -1,5 +1,5 @@
 """
-variant_selector.py v10 — Sélection intelligente des variants
+variant_selector.py v11 — Sélection intelligente des variants
 
 Problème v9 : pick_random_variant() sélectionne au hasard pondéré sans tenir
 compte de l'historique → même variant répété dans le même groupe.
@@ -24,7 +24,8 @@ from datetime import datetime, timedelta
 
 def pick_variant(db, robot_name: str, campaign_name: str,
                  group_url: str = None, language: str = "fr",
-                 exclusion_days: int = 30) -> Optional[Dict]:
+                 exclusion_days: int = 30,
+                 exclude_cross_robot: bool = False) -> Optional[Dict]:
     """
     Sélectionne un variant en évitant les répétitions récentes.
 
@@ -35,6 +36,8 @@ def pick_variant(db, robot_name: str, campaign_name: str,
         group_url      : URL du groupe (pour l'anti-répétition)
         language       : langue du texte à retourner
         exclusion_days : fenêtre d'exclusion en jours (défaut 30)
+        exclude_cross_robot : si True, exclut les variants déjà postés par *tout* robot
+                               sur ce groupe (rotation multi-robots).
 
     Returns:
         Dict variant avec champ "text" dans la langue demandée, ou None.
@@ -53,12 +56,20 @@ def pick_variant(db, robot_name: str, campaign_name: str,
         grp = db.get_group_by_url(group_url)
         if grp:
             since = (datetime.now() - timedelta(days=exclusion_days)).isoformat()
-            rows = db._query(
-                """SELECT variant_id FROM publications
-                   WHERE robot_name=? AND group_id=? AND status='success'
-                   AND campaign_name=? AND created_at>=?""",
-                (robot_name, grp["id"], campaign_name, since)
-            )
+            if exclude_cross_robot:
+                rows = db._query(
+                    """SELECT variant_id FROM publications
+                       WHERE group_id=? AND status='success'
+                       AND campaign_name=? AND created_at>=?""",
+                    (grp["id"], campaign_name, since)
+                )
+            else:
+                rows = db._query(
+                    """SELECT variant_id FROM publications
+                       WHERE robot_name=? AND group_id=? AND status='success'
+                       AND campaign_name=? AND created_at>=?""",
+                    (robot_name, grp["id"], campaign_name, since)
+                )
             used_keys = {r["variant_id"] for r in rows if r.get("variant_id")}
 
     # Variants disponibles (non utilisés récemment)

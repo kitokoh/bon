@@ -1,8 +1,8 @@
 """
-test_v9.py — Tests automatisés BON v9
+test_v10.py — Tests automatisés BON v10 (schéma SQL v9+)
 Couvre : DB, robots, campagnes, médias avec captcha, anti-doublon, factories, seeder
 """
-import sys, os, pathlib, random
+import sys, os, pathlib, random, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 from libs.database import BONDatabase
@@ -12,7 +12,7 @@ from tests.factories import (
     DmQueueFactory, Seeder
 )
 
-DB_PATH = "/tmp/test_bon_v9.db"
+DB_PATH = str(pathlib.Path(tempfile.gettempdir()) / "test_bon_v10.db")
 
 
 def setup():
@@ -38,6 +38,7 @@ def test_db_init():
         "media_assets", "robot_media", "comments", "publications",
         "published_comments", "errors", "selector_stats", "account_blocks",
         "subscriptions", "circuit_breaker_state", "dm_queue", "config_kv",
+        "captcha_solve_log", "scheduler_jobs",
     }
     missing = required - table_names
     assert not missing, f"Tables manquantes : {missing}"
@@ -359,7 +360,7 @@ def run_all():
             traceback.print_exc()
             failed += 1
     print(f"\n{'='*40}")
-    print(f"BON v9 — {passed}/{passed+failed} tests passés")
+    print(f"BON v10 — {passed}/{passed+failed} tests passés")
     if failed:
         print(f"⚠ {failed} test(s) échoués")
         sys.exit(1)

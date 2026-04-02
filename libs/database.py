@@ -1,5 +1,5 @@
 """
-database.py v9 — Source de vérité UNIQUE (tout en SQL, zéro JSON métier)
+database.py v11 — Source de vérité UNIQUE (tout en SQL, zéro JSON métier)
 
 Modèle conceptuel v9 :
   Robot   = instance nommée (robot1, robot2...) liée à 1 compte Facebook
@@ -27,7 +27,7 @@ CORRECTIONS v9 :
   - add_robot()              : création/upsert d'un robot avec compte associé
 """
 
-import sqlite3, json, threading, pathlib
+import sqlite3, json, threading, pathlib, csv
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Union
 
@@ -367,6 +367,27 @@ class BONDatabase:
                 value TEXT NOT NULL,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
 
+            # Journal tentatives résolution CAPTCHA (v11)
+            """CREATE TABLE IF NOT EXISTS captcha_solve_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                robot_name TEXT,
+                solve_type TEXT,
+                status TEXT,
+                error_message TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
+
+            # Jobs planificateur APScheduler (v11)
+            """CREATE TABLE IF NOT EXISTS scheduler_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT UNIQUE NOT NULL,
+                robot_name TEXT NOT NULL,
+                cron_expression TEXT NOT NULL,
+                command_name TEXT DEFAULT 'post',
+                active INTEGER DEFAULT 1,
+                last_run_at TEXT,
+                next_run_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
+
             # Index
             "CREATE INDEX IF NOT EXISTS idx_pub_robot   ON publications(robot_name)",
             "CREATE INDEX IF NOT EXISTS idx_pub_account ON publications(account_id)",
@@ -378,6 +399,8 @@ class BONDatabase:
             "CREATE INDEX IF NOT EXISTS idx_run_robot   ON robot_run_stats(robot_name)",
             "CREATE INDEX IF NOT EXISTS idx_media_camp  ON media_assets(campaign_id)",
             "CREATE INDEX IF NOT EXISTS idx_sub_acc_grp ON subscriptions(account_id, group_id)",
+            "CREATE INDEX IF NOT EXISTS idx_captcha_log_date ON captcha_solve_log(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_sched_robot ON scheduler_jobs(robot_name)",
         ]
         with self._lock:
             conn = self._connect()
@@ -386,7 +409,7 @@ class BONDatabase:
                     conn.execute(stmt)
                 conn.commit()
                 self._apply_migrations(conn)
-                emit("INFO", "DATABASE_INITIALIZED_V9", path=str(self.db_path))
+                emit("INFO", "DATABASE_INITIALIZED_V11", path=str(self.db_path))
             finally:
                 conn.close()
 
@@ -1373,6 +1396,151 @@ class BONDatabase:
 
     def config_all(self):
         return {r["key"]: r["value"] for r in self._query("SELECT key,value FROM config_kv")}
+
+    # ══════════════════════════════════════════
+    # CAPTCHA LOG (v11)
+    # ══════════════════════════════════════════
+
+    def log_captcha_event(self, robot_name, solve_type, status, error_message=None) -> None:
+        self._exec(
+            "INSERT INTO captcha_solve_log (robot_name,solve_type,status,error_message)"
+            " VALUES (?,?,?,?)",
+            (robot_name, solve_type, status, error_message)
+        )
+
+    def get_captcha_solve_stats(self, days: int = 7) -> List[Dict]:
+        since = (datetime.now() - timedelta(days=days)).isoformat()
+        return self._query(
+            "SELECT status, COUNT(*) AS cnt FROM captcha_solve_log"
+            " WHERE created_at>=? GROUP BY status",
+            (since,)
+        )
+
+    # ══════════════════════════════════════════
+    # SCHEDULER JOBS (v11)
+    # ══════════════════════════════════════════
+
+    def scheduler_upsert_job(
+        self, job_id: str, robot_name: str, cron_expression: str,
+        command_name: str = "post", active: int = 1,
+    ) -> None:
+        now = datetime.now().isoformat()
+        row = self._query_one("SELECT id FROM scheduler_jobs WHERE job_id=?", (job_id,))
+        if row:
+            self._exec(
+                """UPDATE scheduler_jobs SET robot_name=?, cron_expression=?,
+                   command_name=?, active=? WHERE job_id=?""",
+                (robot_name, cron_expression, command_name, active, job_id)
+            )
+        else:
+            self._exec(
+                """INSERT INTO scheduler_jobs
+                   (job_id,robot_name,cron_expression,command_name,active,created_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (job_id, robot_name, cron_expression, command_name, active, now)
+            )
+
+    def scheduler_list_jobs(self) -> List[Dict]:
+        return self._query(
+            "SELECT * FROM scheduler_jobs ORDER BY robot_name, job_id"
+        )
+
+    def scheduler_delete_job(self, job_id: str) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute("DELETE FROM scheduler_jobs WHERE job_id=?", (job_id,))
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def scheduler_set_active(self, job_id: str, active: int) -> bool:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "UPDATE scheduler_jobs SET active=? WHERE job_id=?",
+                    (active, job_id)
+                )
+                conn.commit()
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def scheduler_update_run_meta(
+        self, job_id: str, last_run_at: str, next_run_at: Optional[str] = None
+    ) -> None:
+        if next_run_at:
+            self._exec(
+                "UPDATE scheduler_jobs SET last_run_at=?, next_run_at=? WHERE job_id=?",
+                (last_run_at, next_run_at, job_id)
+            )
+        else:
+            self._exec(
+                "UPDATE scheduler_jobs SET last_run_at=? WHERE job_id=?",
+                (last_run_at, job_id)
+            )
+
+    # ══════════════════════════════════════════
+    # EXPORT / PAGINATION PUBLICATIONS (v11)
+    # ══════════════════════════════════════════
+
+    def export_publications_csv(
+        self, out_path, robot_name: Optional[str] = None, encoding: str = "utf-8"
+    ) -> int:
+        if robot_name:
+            rows = self._query(
+                """SELECT p.id, p.robot_name, a.name AS account, g.url AS group_url,
+                          p.campaign_name, p.variant_id, p.status, p.created_at,
+                          p.error_message
+                   FROM publications p
+                   JOIN accounts a ON a.id = p.account_id
+                   JOIN groups g ON g.id = p.group_id
+                   WHERE p.robot_name = ?
+                   ORDER BY p.created_at DESC""",
+                (robot_name,)
+            )
+        else:
+            rows = self._query(
+                """SELECT p.id, p.robot_name, a.name AS account, g.url AS group_url,
+                          p.campaign_name, p.variant_id, p.status, p.created_at,
+                          p.error_message
+                   FROM publications p
+                   JOIN accounts a ON a.id = p.account_id
+                   JOIN groups g ON g.id = p.group_id
+                   ORDER BY p.created_at DESC"""
+            )
+        path = pathlib.Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = [
+            "id", "robot_name", "account", "group_url",
+            "campaign_name", "variant_id", "status", "created_at", "error_message",
+        ]
+        with open(path, "w", newline="", encoding=encoding) as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            w.writeheader()
+            for r in rows:
+                w.writerow(dict(r))
+        return len(rows)
+
+    def get_publications_paginated(
+        self, limit: int = 50, offset: int = 0, robot_name: Optional[str] = None
+    ) -> List[Dict]:
+        if robot_name:
+            return self._query(
+                """SELECT p.*, g.url AS group_url FROM publications p
+                   JOIN groups g ON g.id = p.group_id
+                   WHERE p.robot_name = ?
+                   ORDER BY p.created_at DESC LIMIT ? OFFSET ?""",
+                (robot_name, limit, offset)
+            )
+        return self._query(
+            """SELECT p.*, g.url AS group_url FROM publications p
+               JOIN groups g ON g.id = p.group_id
+               ORDER BY p.created_at DESC LIMIT ? OFFSET ?""",
+            (limit, offset)
+        )
 
     # ══════════════════════════════════════════
     # DASHBOARD

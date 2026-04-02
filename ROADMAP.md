@@ -1,6 +1,23 @@
 # BON — Feuille de route
 
-## État actuel : v10 (avril 2026)
+## État actuel : **v11** (avril 2026)
+
+### Livré en v11
+- **CDN sélecteurs** : plus d’URL GitHub fictive ; `BON_USE_CDN=1` + `BON_SELECTORS_CDN_URL` ou `config set selectors_cdn_url` ; cache TTL `BON_SELECTORS_CACHE_TTL_S`.
+- **Proxy CLI** : `robot create --proxy-server …`, `robot config set|show|clear-proxy`, `post --validate-proxy`, login création avec proxy contexte Playwright.
+- **Export CSV** : `python -m bon export --out … [--robot …]` + pagination DB `get_publications_paginated`.
+- **2captcha** : `libs/captcha_solver.py`, `python -m bon captcha test`, journal `captcha_solve_log`.
+- **Scheduler** : table `scheduler_jobs`, `schedule add|list|remove|daemon` (APScheduler).
+- **API REST** : `python -m bon api` — Flask, `BON_API_TOKEN`, `/v1/*` (robots, dashboard, publications, run).
+- **Cross-robot variants** : `BON_CROSS_ROBOT_VARIANT_EXCLUSION=1` + `pick_variant(..., exclude_cross_robot=True)`.
+- **Tests** : `tests/test_v10.py` (ex-v9), `tests/test_v11.py`.
+
+### Suite possible (v12)
+- Tests E2E DOM synthétique, dashboard web complet, adaptateur PostgreSQL.
+
+---
+
+## Archive : v10 (avril 2026)
 
 ### ✅ Réalisé (v3 → v10)
 

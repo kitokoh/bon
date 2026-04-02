@@ -108,7 +108,8 @@ class RobotManager:
 
     def create_robot(self, robot_name: str, browser,
                      account_name: str = None,
-                     config: dict = None) -> bool:
+                     config: dict = None,
+                     context_proxy: dict = None) -> bool:
         """
         Lance une fenêtre navigateur pour login manuel FB,
         puis enregistre le robot en base.
@@ -123,7 +124,10 @@ class RobotManager:
         emit("INFO", "ROBOT_CREATE_START", robot=robot_name, account=account_name)
 
         try:
-            context = browser.new_context()
+            ctx_kw = {}
+            if context_proxy:
+                ctx_kw["proxy"] = context_proxy
+            context = browser.new_context(**ctx_kw)
             page    = context.new_page()
             page.goto("https://www.facebook.com/login")
 
@@ -145,6 +149,12 @@ class RobotManager:
             cfg.update(config or {})
             cfg["storage_state"] = str(state_path)
             cfg["account_name"]  = account_name
+            if context_proxy:
+                srv = context_proxy.get("server") or ""
+                if srv:
+                    cfg["proxy_server"] = srv
+                    cfg["proxy_username"] = context_proxy.get("username") or ""
+                    cfg["proxy_password"] = context_proxy.get("password") or ""
 
             self.db.upsert_robot(robot_name, account_name, str(state_path), cfg)
             self.db.ensure_account_exists(account_name)
