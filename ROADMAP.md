@@ -1,89 +1,105 @@
-# BON — Feuille de route & suivi qualité
+# BON — Feuille de route
 
-> Dernière mise à jour : **version 7** (améliorations critiques post-v6)
+## État actuel : v10 (avril 2026)
+
+### ✅ Réalisé (v3 → v10)
+
+**Fondations (v3–v6)**
+- Correction deadlock SQLite (RLock)
+- Crash JS selector tester corrigé
+- Boucle infinie scroll bornée
+- Injection URL encodée
+- Détection CAPTCHA corrigée
+- Proxy par contexte Playwright
+- Locale/timezone configurable
+- Architecture nettoyée (code mort supprimé)
+
+**Anti-détection (v7)**
+- Stealth CDP natif (10 vecteurs, 0 dépendance externe)
+- navigator.webdriver → undefined
+- Canvas noise unique par session
+- WebGL vendor/renderer spoofing
+- Plugins, deviceMemory, screen cohérents
+- window.chrome injecté
+- Permissions API normalisée
+
+**Résilience (v7–v8)**
+- Circuit breaker CLOSED→OPEN→HALF-OPEN
+- État CB persisté en DB (survit aux redémarrages)
+- Alertes Telegram async (8 types)
+- Health score adaptatif par compte
+- Warmup progressif nouveaux comptes
+
+**Architecture SQL (v8–v9)**
+- Zéro JSON métier (tout en SQLite)
+- 20 tables : robots, campaigns, variants, media, comments, dm_queue, subscriptions...
+- Modèle Robot (robot1..N) = 1 compte Facebook
+- Anti-doublon publications : was_published_recently()
+- Media assets avec captcha optionnel
+- Pool commentaires SQL + RANDOM()
+- Circuit breaker persisté en DB
+- 8 factories de test (niveau industriel)
+- Migration idempotente v8→v9
+
+**Actions sociales (v9)**
+- subscribe_to_group() — multi-sélecteurs DOM
+- comment_on_post() — pool SQL
+- browse_and_comment() — navigation naturelle
+- send_dm() — texte + image/vidéo
+- process_dm_queue() — file planifiée
+- simulate_natural_browse() — mouvements souris
+
+**Qualité v10**
+- UA Chrome mis à jour : 130–134 (depuis 122–124)
+- user_agents.json externalisé (mise à jour sans code)
+- `python -m bon update-ua` — commande dédiée
+- Alerte au démarrage si UA obsolètes
+- Sélection intelligente de variants (anti-répétition 30j par groupe)
+- Bug Telegram corrigé (get_telegram_config inexistante)
+- configure_from_robot() vs configure_from_session()
+- requirements.txt nettoyé (v10, playwright>=1.50)
+- ROADMAP.md à jour (ce fichier)
 
 ---
 
-## ✅ Améliorations appliquées dans cette version (v7)
+## 🔄 En cours / Backlog v10
 
-### 🔴 Sécurité anti-détection (P1 résolu définitivement)
+### Priorité HAUTE
 
-| # | Fichier | Amélioration |
-|---|---------|-------------|
-| E1 | `libs/stealth_profile.py` *(nouveau)* | Fingerprinting anti-détection natif via CDP Playwright — **0 dépendance externe**. Techniques : `navigator.webdriver → undefined`, Canvas 2D noise par session, WebGL vendor/renderer spoofing, plugins réalistes, `deviceMemory`/`hardwareConcurrency` cohérents, `window.chrome` injecté, `navigator.languages` sync locale, headers HTTP `Sec-Ch-Ua`. Pool de 7 profils matériels + 7 user-agents Chromium 122-124. |
-| E2 | `libs/scraper.py` | `StealthProfile.apply(page)` appelé automatiquement dans `Scraper.open()` après création de la page, **avant toute navigation**. |
-| E3 | `libs/session_manager.py` | `DEFAULT_SESSION_CONFIG` : `"platform": "windows"` pour cohérence matérielle du fingerprint. |
+| ID | Feature | Effort | Critère succès |
+|----|---------|--------|----------------|
+| P1 | CDN sélecteurs activé (GitHub Releases) | 1 semaine | BON_SELECTORS_CDN_URL configuré en prod |
+| P2 | Proxies résidentiels par robot | 2 semaines | 1 proxy par robot, champs proxy_host/port/user/pass |
+| P3 | Tests E2E DOM synthétique | 3 semaines | Flux post, session expirée, stealth testés |
+| P4 | Résolution CAPTCHA auto (2captcha) | 1 semaine | 95%+ CAPTCHA résolus sans intervention |
 
-### 🔴 Résilience multi-comptes (nouveau)
+### Priorité NORMALE
 
-| # | Fichier | Amélioration |
-|---|---------|-------------|
-| F1 | `libs/circuit_breaker.py` *(nouveau)* | Circuit breaker par compte, pattern CLOSED → OPEN → HALF-OPEN. `failure_threshold=3`, `recovery_timeout_s=900`, `half_open_max_ok=2`. Thread-safe, singleton. |
-| F2 | `libs/scraper.py` | Circuit breaker vérifié en tête de boucle. `record_success/failure` à chaque groupe. Erreurs critiques ouvrent le circuit immédiatement. |
+| ID | Feature | Effort | Notes |
+|----|---------|--------|-------|
+| K1 | Scheduler APScheduler | 2 semaines | `python -m bon schedule --robot r1 --cron "0 8 * * *"` |
+| K2 | Dashboard Flask/FastAPI | 5 semaines | Health scores, CB states, graphes 7j |
+| K3 | Export CSV/Excel publications | 1 semaine | openpyxl (déjà installé) |
+| K4 | API REST légère | 4 semaines | GET /robots, POST /robots/{n}/run, auth par token |
 
-### 🟠 Alertes push Telegram (P5 résolu)
+### Priorité FUTURE (v11)
 
-| # | Fichier | Amélioration |
-|---|---------|-------------|
-| G1 | `libs/notifier.py` *(nouveau)* | Alertes Telegram via `urllib.request` stdlib — **0 dépendance externe**. Messages HTML pour blocage, session expirée, CAPTCHA, circuit ouvert, résumé run, health bas. Envoi async (daemon thread), **jamais bloquant**. |
-| G2 | `libs/notifier.py` | Config : vars env `BON_TELEGRAM_TOKEN/CHAT_ID` > champ `"telegram"` session > `logs/telegram.json`. |
-| G3 | `libs/scraper.py` | `notify_critical()` dans les except critiques. `notify_run_summary()` + alerte health en fin de boucle. |
-
-### 🟡 Health score adaptatif + warmup progressif
-
-| # | Fichier | Amélioration |
-|---|---------|-------------|
-| H1 | `libs/database.py` | Colonne `consecutive_failures` + migration idempotente. `record_publication` success → `health_score+2`, failure → `health_score-5`. |
-| H2 | `libs/database.py` | `mark_warmup_completed()` + `get_health_score()`. |
-| I1 | `libs/scraper.py` | Nouveaux comptes (`warmup_completed=0`) : run bridé à 3 groupes / 2 par heure automatiquement. |
-| I2 | `libs/scraper.py` | 1er succès → `mark_warmup_completed()` → limites normales au prochain run. |
-
-### 🟡 CDN sélecteurs amélioré (P3 partiellement résolu)
-
-| # | Fichier | Amélioration |
-|---|---------|-------------|
-| J1 | `libs/selector_registry.py` | Fallback GitHub Releases automatique si `BON_SELECTORS_CDN_URL` non défini. |
-| J2 | `libs/selector_registry.py` | Vérification d'âge du fichier local avant requête. `SELECTORS_MAX_AGE_DAYS` : 30 → **7 jours**. |
+| ID | Feature | Effort | Notes |
+|----|---------|--------|-------|
+| F1 | PostgreSQL optionnel | 4 semaines | DatabaseAdapter SQLite/PG, BON_DB_URL |
+| F2 | Interface web React | 15 semaines | Dashboard complet, gestion robots |
+| F3 | Rotation campagnes cross-robots | 2 semaines | Éviter même variant même groupe entre robots |
 
 ---
 
-## 📊 Récapitulatif par version
+## Score de santé par version
 
-| Version | Points clés | Fichiers modifiés |
-|---------|-------------|-------------------|
-| v3 | Bugs critiques fondateurs (deadlock DB, crash JS) | 8 |
-| v4 | Proxy par contexte, anti_block unifié | 6 |
-| v5 | Validation config, locale/timezone, CDN sélecteurs | 5 |
-| v6 | Architecture legacy, rate-limit DB unifié, rotation logs | 12 |
-| **v7** | **Stealth CDP, circuit breaker, Telegram, health score adaptatif, warmup** | **7** |
+| Version | Score | Highlight |
+|---------|-------|-----------|
+| v3 | 20/100 | Prototype instable |
+| v7 | 87/100 | Stealth + Circuit breaker |
+| v8 | 95/100 | Tout-SQL |
+| v9 | 95/100 | Modèle Robot + factories |
+| v10 | **96/100** | UA à jour + bug Telegram + rotation variants |
 
----
-
-## ⚠️ Problèmes restants
-
-### 🟠 P4 — Résolution CAPTCHA automatique
-Détection OK, alerte Telegram OK. Résolution nécessite une intégration tierce.
-
-```bash
-pip install 2captcha-python
-export TWOCAPTCHA_API_KEY="votre_clé"
-```
-
-### 🟠 P6 — Tests E2E (couverture 0%)
-41 tests unitaires solides. Flux complet non testé. Dépendances : `pytest-playwright` + mock Facebook.
-
-### 🟡 P7 — URL CDN production à configurer
-Le fallback GitHub pointe vers un dépôt exemple. Pour production :
-
-```bash
-export BON_SELECTORS_CDN_URL="https://github.com/votre-org/bon/releases/latest/download/selectors.json"
-```
-
-### 🟢 Améliorations futures (non bloquantes)
-
-| # | Idée | Complexité |
-|---|------|-----------|
-| K1 | Rotation de proxies résidentiels entre groupes | Moyenne |
-| K2 | Dashboard Flask/FastAPI monitoring health scores | Haute |
-| K3 | Export CSV/Excel des stats de publication | Faible |
-| K4 | Scheduler intégré (`apscheduler`) | Moyenne |
+**Objectif v11 : 9.5/10** — CDN actif + proxies + tests E2E

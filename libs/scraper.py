@@ -36,6 +36,7 @@ from libs.stealth_profile import get_stealth_profile
 from libs.circuit_breaker import get_circuit_breaker
 from libs.notifier import get_notifier, notify_critical, notify_run_summary
 from libs.social_actions import SocialActions
+from libs.variant_selector import pick_variant
 from automation.selector_health import get_health_manager
 from automation.anti_block import get_anti_block_manager
 
@@ -134,7 +135,7 @@ class Scraper:
         _platform = robot_config.get("platform", "windows")
         self.stealth  = get_stealth_profile(locale=_locale, platform=_platform)
         self.notifier = get_notifier()
-        self.notifier.configure_from_session(robot_config)
+        self.notifier.configure_from_robot(robot_config)
 
         # Résoudre account_name depuis la config robot
         self._account_name = robot_config.get("account_name", robot_name)
@@ -245,7 +246,8 @@ class Scraper:
             campaign    = random.choice(campaigns)
             camp_name   = campaign["name"]
             language    = group.get("language", "fr")
-            variant     = db.pick_random_variant(camp_name, language)
+            variant     = pick_variant(db, robot_name=self.robot_name, campaign_name=camp_name,
+                              group_url=group_url, language=language, exclusion_days=30)
             if not variant:
                 emit("WARN", "NO_VARIANT", robot=self.robot_name, campaign=camp_name)
                 skipped_count += 1
