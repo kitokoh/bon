@@ -2,6 +2,10 @@
 install.py — Installation du module BON dans un venv isolé
 Lancez : python install.py
 Compatible Windows / Linux / macOS
+
+Options :
+  --full   Installe aussi les dépendances optionnelles
+           (flask, flask-limiter, apscheduler, openpyxl, pytest)
 """
 import sys
 import subprocess
@@ -10,7 +14,12 @@ import platform
 
 ROOT = pathlib.Path(__file__).parent
 VENV_DIR = ROOT / ".venv"
+REQ_CORE = ROOT / "requirements-core.txt"
+REQ_OPT  = ROOT / "requirements-optional.txt"
+# Fallback si quelqu'un appelle sans requirements-core.txt (compatibilité)
 REQ_FILE = ROOT / "requirements.txt"
+
+INSTALL_FULL = "--full" in sys.argv
 
 
 def run(cmd: list, **kwargs) -> int:
@@ -35,12 +44,13 @@ def pip_executable() -> pathlib.Path:
 
 
 def main():
-    print("=" * 55)
+    print("==" * 28)
     print("  BON — Installation du module Facebook Publisher")
-    print("=" * 55)
+    print("==" * 28)
     print(f"OS          : {platform.system()} {platform.release()}")
     print(f"Python host : {sys.version}")
     print(f"Répertoire  : {ROOT}")
+    print(f"Mode        : {'COMPLET (--full)' if INSTALL_FULL else 'STANDARD (core uniquement)'}")
 
     # 1. Créer le venv si inexistant
     if not VENV_DIR.exists():
@@ -61,12 +71,21 @@ def main():
     run([str(py), "-m", "pip", "install", "--upgrade", "pip", "--quiet"])
 
     # 3. Installer les dépendances
-    print("\n[3/4] Installation des dépendances (requirements.txt)...")
-    rc = run([str(pip), "install", "-r", str(REQ_FILE)])
+    req = REQ_CORE if REQ_CORE.exists() else REQ_FILE
+    print(f"\n[3/4] Installation des dépendances core ({req.name})...")
+    rc = run([str(pip), "install", "-r", str(req)])
     if rc != 0:
-        print("✗ Échec de l'installation des dépendances.")
+        print("✗ Échec de l'installation des dépendances core.")
         sys.exit(1)
-    print("✓ Dépendances installées.")
+    print("✓ Dépendances core installées.")
+
+    if INSTALL_FULL and REQ_OPT.exists():
+        print(f"\n[3b/4] Installation des dépendances optionnelles ({REQ_OPT.name})...")
+        rc = run([str(pip), "install", "-r", str(REQ_OPT)])
+        if rc != 0:
+            print("⚠ Échec partiel des dépendances optionnelles (non bloquant).")
+        else:
+            print("✓ Dépendances optionnelles installées.")
 
     # 4. Installer les navigateurs Playwright
     print("\n[4/4] Installation des navigateurs Playwright (Chromium)...")
@@ -77,9 +96,9 @@ def main():
     print("✓ Playwright Chromium installé.")
 
     # Résumé
-    print("\n" + "=" * 55)
+    print("\n" + "==" * 28)
     print("  ✓ Installation terminée avec succès !")
-    print("=" * 55)
+    print("==" * 28)
     print("\nProchaines étapes :")
     print(f"  1. Activez le venv :")
     if sys.platform == "win32":
@@ -92,6 +111,9 @@ def main():
     print(f"       python -m bon post --robot robot1 --headless")
     print(f"\n  Pour lister les robots : python -m bon robot list")
     print(f"  Pour le dashboard     : python -m bon dashboard")
+    if not INSTALL_FULL:
+        print(f"\n  ► Pour l'API REST, le scheduler et l'export Excel :")
+        print(f"       python install.py --full")
 
 
 if __name__ == "__main__":

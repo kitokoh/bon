@@ -1,4 +1,4 @@
-# BON v11 — Guide de déploiement & test rapide
+# BON v12 — Guide de déploiement & test rapide
 
 > Temps estimé : **5–10 min** (hors téléchargement Playwright).
 
@@ -241,4 +241,67 @@ python -m pytest tests/test_v10.py tests/test_v11.py -v
 | 5 | `tests/test_smoke.py` | `TestDefaultSessionConfig` migré vers `DEFAULT_ROBOT_CONFIG` (v11) — plus d'import du legacy `session_manager` |
 | 6 | `libs/config_manager.py` | `list_sessions()` : fallback robuste avec `sorted()` correct |
 | 7 | `libs/session_manager.py` | Réécriture complète : délègue à `RobotManager` — élimine les appels à `db.get_session()`, `db.upsert_session()`, `db.get_media_assets()` qui n'existent pas dans `BONDatabase` v11 |
+
+
+---
+
+## Nouveautés v12 (CLI étendue)
+
+### `robot config set` — tous les paramètres configurables
+
+```bash
+# Proxy
+python -m bon robot config set --robot robot1 --proxy http://host:8080
+
+# Limites de publication
+python -m bon robot config set --robot robot1 --max-groups-per-run 15
+python -m bon robot config set --robot robot1 --max-runs-per-day 3
+python -m bon robot config set --robot robot1 --delay-min 45 --delay-max 90
+python -m bon robot config set --robot robot1 --cooldown 3600
+
+# Localisation (fingerprinting anti-détection)
+python -m bon robot config set --robot robot1 --locale fr-FR
+python -m bon robot config set --robot robot1 --timezone Europe/Paris
+
+# Notifications Telegram
+python -m bon robot config set --robot robot1 --telegram-token TOK --telegram-chat-id 123456
+
+# CAPTCHA automatique par robot (optionnel)
+python -m bon robot config set --robot robot1 --captcha-key VOTRE_CLE_2CAPTCHA
+python -m bon robot config set --robot robot1 --clear-captcha-key
+
+# Voir la config actuelle
+python -m bon robot config show --robot robot1
+```
+
+### Filtres date sur les exports et l'API
+
+```bash
+python -m bon export --out publications.csv --date-from 2026-01-01 --date-to 2026-03-31
+python -m bon export --out q1.xlsx --date-from 2026-01-01 --date-to 2026-03-31
+curl -H "Authorization: Bearer secret" \
+  "http://localhost:8765/api/v1/publications?date_from=2026-01-01&date_to=2026-03-31"
+```
+
+### Installation v12 (deux niveaux)
+
+```bash
+# Usage minimal (publication seulement, 4 paquets)
+pip install -r requirements-core.txt && playwright install chromium
+
+# Usage complet (API, scheduler, Excel, tests)
+python install.py --full
+```
+
+### CAPTCHA — comportement par défaut
+
+BON ne résout **jamais** les CAPTCHAs automatiquement sans configuration explicite.
+
+| Scénario | Comportement |
+|----------|-------------|
+| Pas de clé, pas de `BON_AUTO_SOLVE_CAPTCHA` | Log WARN → continue (non bloquant) |
+| `BON_AUTO_SOLVE_CAPTCHA=1` sans clé | Log 'skipped — aucune clé' → continue |
+| Clé robot en DB + `BON_AUTO_SOLVE_CAPTCHA=1` | Résolution auto avec la clé du robot |
+| `BON_2CAPTCHA_KEY` global + `BON_AUTO_SOLVE_CAPTCHA=1` | Résolution auto avec la clé globale |
+| Service 2captcha down | Timeout → log WARN → continue sans bloquer |
 

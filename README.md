@@ -1,4 +1,4 @@
-# BON v11 — Facebook Groups Publisher
+# BON v12 — Facebook Groups Publisher
 
 Module **Python 3.10+** / **Playwright** pour automatiser (avec prudence) la publication dans des groupes Facebook, avec **plusieurs robots** (un par compte), **données en SQLite**, **sélecteurs externalisés**, **circuit breaker**, **API REST** et **planification cron**.
 
@@ -29,7 +29,9 @@ Module **Python 3.10+** / **Playwright** pour automatiser (avec prudence) la pub
 | API | `/api/v1/*` | **`/v1/*` et `/api/v1/*`** (doublon), Bearer **`BON_API_TOKEN`** |
 | CDN sélecteurs | Souvent « on » par défaut | **`BON_USE_CDN=1`** + URL **`BON_SELECTORS_CDN_URL`** ou `bon config set selectors_cdn_url` (**pas** d’URL fictive) |
 | Export | CSV + Excel | **`bon export`** `.csv` / `.xlsx` + **`GET .../publications/export?format=`** |
-| Config robot CLI | `--set` tous champs | **`robot config set`** pour **proxy** ; autres réglages → **v12** ou SQLite |
+| Config robot CLI | `--set` tous champs | **`robot config set`** : proxy, max-groups-per-run, max-runs-per-day, delay-min/max, cooldown, locale, timezone, telegram, **captcha-key** (v12) |
+| Filtres date | Absent | **`--date-from` / `--date-to`** sur `export` + API REST (v12) |
+| Rate limiting | Absent | **`flask-limiter`** optionnel avec fallback gracieux (v12) |
 | Tests | ~30 tests dont stealth | **`tests/test_v10.py`**, **`tests/test_v11.py`**, **`tests/test_smoke.py`** — **pas d’E2E DOM** (prévu v12) |
 
 ---
@@ -198,4 +200,22 @@ Les versions **v3–v10** ont introduit : migration Selenium → Playwright, mod
 
 ---
 
-*BON — avril 2026 — v11*
+## État actuel v12
+
+| Dimension | Score v11 | Score v12 | Évolution |
+|-----------|-----------|-----------|----------|
+| Architecture & modularité | 19/20 | 19/20 | → stable |
+| Sécurité & anti-détection | 17/20 | 17/20 | → stable |
+| Résilience & gestion erreurs | 18/20 | 18/20 | → stable |
+| Tests & qualité code | 13/20 | 14/20 | ↑ +1 (close, reset_database) |
+| API & intégrations | 18/20 | 19/20 | ↑ +1 (filtres date, rate limiting) |
+| Ergonomie opérationnelle | 12/20 | 15/20 | ↑ +3 (config set complet) |
+| **TOTAL** | **97/120** | **102/120** | **↑ +5 pts** |
+
+**Nouveautés v12** : `close()` + `__del__` sur BONDatabase, `reset_database()` pour tests, `captcha_api_key` par robot en DB, `robot config set` étendu (11 paramètres), filtres `date_from`/`date_to` sur exports et API, rate limiting `flask-limiter` optionnel, `check_optional_deps()`.
+
+**Corrections v13** : `captcha_api_key` exposé dans `get_config()` (bug I1), dépendances optionnelles séparées (`requirements-core.txt` / `requirements-optional.txt`), DEPLOY.md et README mis à jour, 6 nouveaux tests de cohérence ajoutés.
+
+---
+
+*BON — avril 2026 — v12*

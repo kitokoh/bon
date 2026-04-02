@@ -84,6 +84,9 @@ class RobotManager:
             "timezone_id":             robot.get("timezone_id", "Europe/Paris"),
             "platform":                robot.get("platform", "windows"),
             "proxy":                   robot.get("proxy"),
+            # I1-FIX (v13): clé captcha par robot — None = pas de clé spécifique,
+            # CaptchaSolver utilisera BON_2CAPTCHA_KEY global si présent.
+            "captcha_api_key":         robot.get("captcha_api_key"),
             "telegram":                {
                 "token":   robot.get("telegram_token", ""),
                 "chat_id": robot.get("telegram_chat_id", ""),

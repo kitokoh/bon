@@ -1,0 +1,22 @@
+# BON v13 — Dépendances OPTIONNELLES
+# Installez uniquement ce dont vous avez besoin :
+#
+#   API REST uniquement      : pip install flask>=3.0.0
+#   Rate limiting API        : pip install flask flask-limiter>=3.5.0
+#   Planificateur cron       : pip install apscheduler>=3.10.0
+#   Export Excel (.xlsx)     : pip install openpyxl>=3.1.0
+#   Toutes les options       : pip install -r requirements-optional.txt
+#   Suite de tests complète  : pip install pytest>=8.0.0
+
+# API REST (flask) + rate limiting (flask-limiter)
+flask>=3.0.0
+flask-limiter>=3.5.0
+
+# Planificateur cron (schedule daemon)
+apscheduler>=3.10.0
+
+# Export XLSX
+openpyxl>=3.1.0
+
+# Tests
+pytest>=8.0.0

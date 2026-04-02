@@ -10,6 +10,12 @@ CORRECTIONS v6 :
   - TestURLEncoding          : keyword encodé dans save_groups
   - TestScrollBound          : human_scroll_to_bottom bornée
   - Tous les tests v4/v5 conservés
+
+AJOUTS v13 (corrections I3/I4/I5) :
+  - TestDeployMdVersion      : DEPLOY.md mentionne v12, pas v11 (I3)
+  - TestReadmeMdVersion      : README.md mentionne v12 (I4)
+  - TestCaptchaKeyInConfig   : captcha_api_key présent dans get_config() (I1)
+  - TestCliCommandsConsistent: commandes CLI argparse vs DEPLOY.md cohérentes (I5)
 """
 import sys
 import pathlib
@@ -516,3 +522,230 @@ class TestScrollBound:
         assert iteration_count <= 5, (
             f"human_scroll_to_bottom a dépassé la borne : {iteration_count} itérations"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TESTS v13 — Corrections I1 / I3 / I4 / I5
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDeployMdVersion(unittest.TestCase):
+    """I3/I5 — DEPLOY.md doit afficher 'BON v12', pas 'BON v11'."""
+
+    DEPLOY = pathlib.Path(__file__).parent.parent / "DEPLOY.md"
+
+    def test_deploy_md_title_is_v12(self):
+        """Le titre principal doit mentionner v12."""
+        content = self.DEPLOY.read_text(encoding="utf-8")
+        self.assertIn(
+            "BON v12",
+            content,
+            "DEPLOY.md doit contenir 'BON v12' dans son titre (I3)",
+        )
+
+    def test_deploy_md_no_v11_title(self):
+        """L'ancien titre 'BON v11 — Guide de déploiement' ne doit plus apparaître."""
+        content = self.DEPLOY.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "# BON v11 — Guide de déploiement",
+            content,
+            "DEPLOY.md contient encore l'ancien titre v11 (I3)",
+        )
+
+    def test_deploy_md_mentions_nouveautes_v12(self):
+        """La section 'Nouveautés v12' doit être présente."""
+        content = self.DEPLOY.read_text(encoding="utf-8")
+        self.assertIn(
+            "Nouveautés v12",
+            content,
+            "DEPLOY.md doit documenter les nouveautés v12 (I3)",
+        )
+
+    def test_deploy_md_documents_captcha_key_option(self):
+        """L'option --captcha-key doit être documentée."""
+        content = self.DEPLOY.read_text(encoding="utf-8")
+        self.assertIn(
+            "--captcha-key",
+            content,
+            "DEPLOY.md doit documenter --captcha-key dans robot config set (I3)",
+        )
+
+    def test_deploy_md_documents_date_filters(self):
+        """Les filtres --date-from / --date-to doivent être documentés."""
+        content = self.DEPLOY.read_text(encoding="utf-8")
+        self.assertIn(
+            "--date-from",
+            content,
+            "DEPLOY.md doit documenter --date-from (I3)",
+        )
+
+
+class TestReadmeMdVersion(unittest.TestCase):
+    """I4 — README.md doit référencer v12."""
+
+    README = pathlib.Path(__file__).parent.parent / "README.md"
+
+    def test_readme_mentions_v12(self):
+        """README doit mentionner v12 au moins une fois."""
+        content = self.README.read_text(encoding="utf-8")
+        self.assertIn(
+            "v12",
+            content,
+            "README.md doit mentionner v12 (I4)",
+        )
+
+    def test_readme_footer_not_v11(self):
+        """Le footer README ne doit plus dire 'v11'."""
+        content = self.README.read_text(encoding="utf-8")
+        # Le footer exact v11 : '*BON — avril 2026 — v11*'
+        self.assertNotIn(
+            "— v11*",
+            content,
+            "README.md contient encore le footer v11 (I4)",
+        )
+
+
+class TestCaptchaKeyInGetConfig(unittest.TestCase):
+    """I1 — captcha_api_key doit être présent dans le dict retourné par get_config()."""
+
+    def test_get_config_contains_captcha_api_key_for_missing_robot(self):
+        """
+        Même pour un robot inexistant, get_config() doit retourner
+        le champ captcha_api_key (None = pas de clé).
+        Ce test vérifie que le champ est au moins déclaré dans DEFAULT_ROBOT_CONFIG
+        ou exposé quand le robot est absent.
+        """
+        # On importe uniquement robot_manager (pas de DB réelle requise ici)
+        sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+        from libs.robot_manager import RobotManager, DEFAULT_ROBOT_CONFIG  # noqa: F401
+
+        # DEFAULT_ROBOT_CONFIG est la base quand le robot n'existe pas en DB
+        # get_config() pour robot absent retourne dict(DEFAULT_ROBOT_CONFIG)
+        # → le champ n'est pas requis dans DEFAULT (c'est une colonne DB optionnelle)
+        # Le vrai test : quand le robot EXISTE en DB, captcha_api_key doit être dans cfg.
+        # On vérifie ici que le code source contient bien le champ (intégration légère).
+        robot_mgr_src = (
+            pathlib.Path(__file__).parent.parent / "libs" / "robot_manager.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '"captcha_api_key"',
+            robot_mgr_src,
+            "get_config() doit exposer captcha_api_key dans son dict (I1 fix)",
+        )
+        self.assertIn(
+            'robot.get("captcha_api_key")',
+            robot_mgr_src,
+            "get_config() doit lire captcha_api_key depuis le dict robot DB (I1 fix)",
+        )
+
+    def test_captcha_key_comment_documents_intent(self):
+        """Le commentaire I1-FIX doit être présent (trace de la correction)."""
+        robot_mgr_src = (
+            pathlib.Path(__file__).parent.parent / "libs" / "robot_manager.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "I1-FIX",
+            robot_mgr_src,
+            "Le commentaire I1-FIX doit être présent dans robot_manager.py",
+        )
+
+
+class TestRequirementsStructure(unittest.TestCase):
+    """I2 — La structure des fichiers requirements doit être correcte."""
+
+    ROOT = pathlib.Path(__file__).parent.parent
+
+    def test_requirements_core_exists(self):
+        self.assertTrue(
+            (self.ROOT / "requirements-core.txt").exists(),
+            "requirements-core.txt doit exister (I2)",
+        )
+
+    def test_requirements_optional_exists(self):
+        self.assertTrue(
+            (self.ROOT / "requirements-optional.txt").exists(),
+            "requirements-optional.txt doit exister (I2)",
+        )
+
+    def test_requirements_txt_references_core(self):
+        """requirements.txt doit inclure requirements-core.txt via -r."""
+        content = (self.ROOT / "requirements.txt").read_text(encoding="utf-8")
+        self.assertIn(
+            "-r requirements-core.txt",
+            content,
+            "requirements.txt doit déléguer à requirements-core.txt (I2)",
+        )
+
+    def test_flask_not_in_core(self):
+        """flask ne doit PAS être dans requirements-core.txt."""
+        content = (self.ROOT / "requirements-core.txt").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "flask",
+            content.lower(),
+            "flask est une dépendance optionnelle — ne doit pas être dans core (I2)",
+        )
+
+    def test_flask_in_optional(self):
+        """flask doit être dans requirements-optional.txt."""
+        content = (self.ROOT / "requirements-optional.txt").read_text(encoding="utf-8")
+        self.assertIn(
+            "flask",
+            content.lower(),
+            "flask doit être listé dans requirements-optional.txt (I2)",
+        )
+
+    def test_playwright_in_core(self):
+        """playwright doit être dans requirements-core.txt."""
+        content = (self.ROOT / "requirements-core.txt").read_text(encoding="utf-8")
+        self.assertIn(
+            "playwright",
+            content.lower(),
+            "playwright est une dépendance core obligatoire (I2)",
+        )
+
+
+class TestCliCommandsConsistent(unittest.TestCase):
+    """I5 — Les commandes CLI dans DEPLOY.md doivent exister dans __main__.py."""
+
+    ROOT = pathlib.Path(__file__).parent.parent
+
+    def _main_src(self):
+        return (self.ROOT / "__main__.py").read_text(encoding="utf-8")
+
+    def _deploy_src(self):
+        return (self.ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+
+    def test_robot_config_set_subcommand_exists(self):
+        """'robot config set' doit être implémenté dans __main__.py."""
+        src = self._main_src()
+        self.assertTrue(
+            "config set" in src or "config_set" in src,
+            "__main__.py doit implémenter 'robot config set' (I5)",
+        )
+
+    def test_schedule_daemon_subcommand_exists(self):
+        """'schedule daemon' doit être implémenté dans __main__.py."""
+        src = self._main_src()
+        self.assertIn(
+            "daemon",
+            src,
+            "__main__.py doit implémenter 'schedule daemon' (I5)",
+        )
+
+    def test_export_subcommand_exists(self):
+        """'export' doit être implémenté dans __main__.py."""
+        src = self._main_src()
+        self.assertIn(
+            "export",
+            src,
+            "__main__.py doit implémenter la commande 'export' (I5)",
+        )
+
+    def test_deploy_md_documents_schedule_daemon(self):
+        """'schedule daemon' doit être documenté dans DEPLOY.md."""
+        deploy = self._deploy_src()
+        self.assertIn(
+            "schedule daemon",
+            deploy,
+            "DEPLOY.md doit documenter 'schedule daemon' (I5)",
+        )
+

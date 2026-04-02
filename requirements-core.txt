@@ -1,0 +1,17 @@
+# BON v13 — Dépendances OBLIGATOIRES
+# Installation : pip install -r requirements-core.txt && playwright install chromium
+#
+# Ces 5 paquets sont requis pour le fonctionnement de base :
+#   publication Facebook (sans API, sans scheduler, sans export Excel)
+
+# Moteur navigateur
+playwright>=1.50.0
+
+# Requêtes HTTP (CDN sélecteurs, résolution CAPTCHA via 2captcha)
+requests>=2.32.0
+
+# Variables d'environnement (.env)
+python-dotenv>=1.0.0
+
+# Gestion des emojis dans les publications
+emoji>=2.14.0

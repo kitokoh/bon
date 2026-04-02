@@ -1,29 +1,16 @@
-# BON — Facebook Publisher v12
-# Dependances — avril 2026
+# BON v13 — Facebook Publisher
+# ──────────────────────────────────────────────────────────────────────────────
+# Ce fichier installe UNIQUEMENT les dépendances obligatoires (core).
+# Il est conservé pour compatibilité avec les outils qui lisent requirements.txt.
+#
+# ► Installation standard (usage publication seulement) :
+#     pip install -r requirements.txt && playwright install chromium
+#
+# ► Installation avec toutes les options (API, scheduler, Excel, tests) :
+#     pip install -r requirements.txt -r requirements-optional.txt
+#     playwright install chromium
+#
+# ► Voir requirements-core.txt et requirements-optional.txt pour le détail.
+# ──────────────────────────────────────────────────────────────────────────────
 
-# Moteur navigateur
-playwright>=1.50.0
-
-# Requetes HTTP (CDN selecteurs, captcha)
-requests>=2.32.0
-
-# Utilitaires
-python-dotenv>=1.0.0
-emoji>=2.14.0
-
-# Tests
-pytest>=8.0.0
-
-# v11/v12 : planificateur + API REST + export Excel
-apscheduler>=3.10.0
-flask>=3.0.0
-openpyxl>=3.1.0
-
-# v12 : rate limiting API REST (optionnel mais recommande)
-flask-limiter>=3.5.0
-
-# Resolution CAPTCHA : uniquement cle API + requests (voir libs/captcha_solver.py)
-# Aucune dependance SDK supplementaire requise.
-
-# Pour installer :
-# pip install -r requirements.txt && playwright install chromium
+-r requirements-core.txt
