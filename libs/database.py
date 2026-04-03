@@ -446,6 +446,11 @@ class BONDatabase:
             "ALTER TABLE robots ADD COLUMN captcha_api_key TEXT DEFAULT NULL",
             "ALTER TABLE publications ADD COLUMN robot_name TEXT",
             "ALTER TABLE publications ADD COLUMN post_type TEXT DEFAULT 'text_image'",
+            # v13 — Profil UI par compte (langue + variante interface Facebook)
+            "ALTER TABLE accounts ADD COLUMN ui_lang TEXT DEFAULT NULL",
+            "ALTER TABLE accounts ADD COLUMN ui_variant TEXT DEFAULT NULL",
+            "ALTER TABLE accounts ADD COLUMN ui_confidence INTEGER DEFAULT 0",
+            "ALTER TABLE accounts ADD COLUMN ui_detected_at TEXT DEFAULT NULL",
         ]
         for m in migrations:
             try:
@@ -1735,3 +1740,44 @@ def reset_database(new_instance: Optional[BONDatabase] = None) -> None:
             except Exception:
                 pass
         _db_instance = new_instance
+
+
+    # ── UI Profile (ajouté v13) ───────────────────────────────────────────
+
+    def update_account_ui_profile(self, account, lang: str,
+                                   variant: str, confidence: int = 0) -> None:
+        """
+        Sauvegarde le profil UI détecté pour un compte.
+        Appelé par AccountUIProfiler après détection automatique.
+        """
+        account_id = self._resolve_account_id(account)
+        if not account_id and isinstance(account, str):
+            account_id = self.ensure_account_exists(account)
+        if account_id:
+            from datetime import datetime as _dt
+            now = _dt.now().isoformat()
+            self._exec(
+                """UPDATE accounts
+                   SET ui_lang=?, ui_variant=?, ui_confidence=?,
+                       ui_detected_at=?, updated_at=?
+                   WHERE id=?""",
+                (lang, variant, confidence, now, now, account_id)
+            )
+
+    def get_ui_profile(self, account) -> dict:
+        """
+        Retourne le profil UI stocké pour un compte.
+        Returns dict avec: ui_lang, ui_variant, ui_confidence, ui_detected_at
+
+        Utilise dict(row) pour être safe sur des DB existantes où la migration
+        _apply_migrations() n'a pas encore ajouté les colonnes ui_*.
+        """
+        row = (self.get_account(account) if isinstance(account, str)
+               else self.get_account_by_id(account))
+        if not row:
+            return {}
+        row_dict = dict(row) if row else {}
+        result = {}
+        for key in ("ui_lang", "ui_variant", "ui_confidence", "ui_detected_at"):
+            result[key] = row_dict.get(key)
+        return result

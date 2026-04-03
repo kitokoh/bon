@@ -1,15 +1,47 @@
 """
-__main__.py v11 — Point d'entrée BON
+__main__.py v14 — Point d'entrée BON
 
-Commandes principales :
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  NOUVEAUTÉS v14
+  ─────────────
+  PHASE 2 — Isolation sessions (session_manager.py)
+    Profil Chrome dédié par robot, proxy dédié par session,
+    0 cookie partagé, parallélisme sûr, lifecycle start/stop/restart
+
+  PHASE 3 — Anti-détection avancé (human_behavior.py)
+    Délais Gamma non-linéaires, trajectoires souris Bézier,
+    scroll humain, clic randomisé, simulation fatigue
+
+  PHASE 4 — Task Queue SQLite (task_queue.py)
+    post / comment / join_group, retry backoff exponentiel
+    t = base * 2^n, persistance crash, workers thread
+
+  PHASE 5 — Monitoring industriel (monitor.py)
+    Taux succès/compte, classification erreurs, actions/heure,
+    health score 0-100, logs JSON structurés
+
+  PHASE 6 — CLI Pro (cli_v14.py)
+    add-account, assign-proxy, start, stop, status --watch,
+    logs, queue, enqueue, health
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Commandes v14 (CLI Pro) :
+  python -m bon add-account --name robot1 --email x@fb.com
+  python -m bon assign-proxy --robot robot1 --proxy-server http://host:8080
+  python -m bon start [--robots robot1 robot2]
+  python -m bon stop  [--robots robot1]
+  python -m bon status [--watch] [--interval 5]
+  python -m bon logs [--robot robot1] [--lines 50] [--json]
+  python -m bon queue [--robot robot1] [--status pending]
+  python -m bon enqueue --type post --robot robot1 --campaign camp1
+  python -m bon health [--robot robot1]
+
+Commandes historiques (v11+) :
   python -m bon robot create --robot <nom> [--account <nom>] [--proxy-server URL ...]
   python -m bon robot config show|set|clear-proxy --robot <nom>
-  python -m bon robot config set --robot <nom> [--max-groups-per-run N] [--locale fr-FR]
-  python -m bon robot config set --robot <nom> [--telegram-token T] [--captcha-key K]
   python -m bon post --robot <nom> [--headless] [--validate-proxy]
   python -m bon export --out fichier.csv [--robot <nom>]
   python -m bon captcha test
-  (optionnel) BON_AUTO_SOLVE_CAPTCHA=1 — résolution reCAPTCHA/hCaptcha via 2captcha dans le flux navigateur
   python -m bon schedule add|list|remove|daemon ...
   python -m bon api --host 127.0.0.1 --port 8765
   python -m bon config set|get <clé> [valeur]
@@ -200,6 +232,64 @@ def parse_args():
     sel_sub = sel.add_subparsers(dest="selectors_cmd")
     su = sel_sub.add_parser("update")
     su.add_argument("--force", action="store_true")
+
+    uid = sub.add_parser(
+        "ui-detect",
+        help="Forcer la re-détection du profil UI (langue/variante) d'un compte",
+    )
+    uid.add_argument("--robot", required=True, help="Nom du robot à ré-analyser")
+    uid.add_argument(
+        "--force",
+        action="store_true",
+        default=True,
+        help="Ignore le cache DB et re-détecte depuis le DOM (défaut: True)",
+    )
+
+    # ── Commandes v14 (CLI Pro) ───────────────────────────────────────────
+    aa = sub.add_parser("add-account", help="[v14] Ajouter un compte Facebook")
+    aa.add_argument("--name", required=True)
+    aa.add_argument("--email", default=None)
+    aa.add_argument("--profile-url", default=None)
+
+    ap = sub.add_parser("assign-proxy", help="[v14] Assigner un proxy à un robot")
+    ap.add_argument("--robot", required=True)
+    ap.add_argument("--proxy-server", required=True)
+    ap.add_argument("--proxy-user", default=None)
+    ap.add_argument("--proxy-pass", default=None)
+
+    st = sub.add_parser("start", help="[v14] Démarrer des sessions isolées")
+    st.add_argument("--robots", nargs="*", metavar="ROBOT")
+
+    sp = sub.add_parser("stop", help="[v14] Arrêter des sessions")
+    sp.add_argument("--robots", nargs="*", metavar="ROBOT")
+    sp.add_argument("--clean-profile", action="store_true")
+
+    sta = sub.add_parser("status", help="[v14] Statut temps-réel")
+    sta.add_argument("--watch", action="store_true")
+    sta.add_argument("--interval", type=int, default=5)
+
+    lg = sub.add_parser("logs", help="[v14] Derniers logs JSON")
+    lg.add_argument("--lines", type=int, default=30)
+    lg.add_argument("--robot", default=None)
+    lg.add_argument("--event", default=None)
+    lg.add_argument("--json", action="store_true")
+
+    qu = sub.add_parser("queue", help="[v14] Statut file de tâches")
+    qu.add_argument("--robot", default=None)
+    qu.add_argument("--status", default=None,
+                    choices=["pending", "running", "success", "failed", "dead"])
+
+    eq = sub.add_parser("enqueue", help="[v14] Ajouter une tâche")
+    eq.add_argument("--type", required=True, choices=["post", "comment", "join_group"])
+    eq.add_argument("--robot", required=True)
+    eq.add_argument("--campaign", default=None)
+    eq.add_argument("--groups", default=None)
+    eq.add_argument("--urls", default=None)
+    eq.add_argument("--group-url", default=None)
+    eq.add_argument("--priority", type=int, default=5)
+
+    hl = sub.add_parser("health", help="[v14] Score de santé des comptes")
+    hl.add_argument("--robot", default=None)
 
     return p.parse_args()
 
@@ -690,6 +780,54 @@ def cmd_selectors_update(args):
     print("✓ Sélecteurs mis à jour." if ok else "(aucune mise à jour — voir logs / config CDN)")
 
 
+def cmd_ui_detect(args):
+    """
+    Force la re-détection du profil UI (langue + variante) d'un robot.
+    Lance un navigateur headless, charge Facebook, analyse le DOM,
+    et met à jour la base de données.
+
+    Usage : python -m bon ui-detect --robot robot1
+    """
+    from libs.account_ui_profiler import AccountUIProfiler
+
+    robot_name = args.robot
+    rm, cfg = _load_robot(robot_name)
+
+    print(f"\n🔍 Détection du profil UI pour '{robot_name}'...")
+
+    try:
+        with sync_playwright() as pw:
+            engine = PlaywrightEngine(pw, cfg, robot_name=robot_name)
+            page = engine.new_page(headless=True)
+
+            # Charger la page d'accueil FB pour maximiser les signaux DOM
+            try:
+                page.goto("https://www.facebook.com/?sk=h_nor",
+                          wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception as e:
+                print(f"⚠ Navigation Facebook échouée : {e}")
+                print("  Détection sur la page de session courante...")
+
+            db = get_database()
+            profiler = AccountUIProfiler(page, db, account_name=robot_name)
+            profile = profiler.detect(force_refresh=True)
+
+            print(f"\n✓ Profil UI détecté et sauvegardé :")
+            print(f"   Langue    : {profile.lang}")
+            print(f"   Variante  : {profile.variant}")
+            print(f"   Confiance : {profile.confidence}%")
+            print(f"   Source    : {profile.source}")
+            print(f"   Timestamp : {profile.detected_at}")
+
+            engine.close()
+
+    except Exception as e:
+        emit("ERROR", "UI_DETECT_CMD_FAILED", robot=robot_name, error=str(e))
+        print(f"\n✗ Échec de la détection : {e}")
+        sys.exit(1)
+
+
 def main():
     _bootstrap()
     args = parse_args()
@@ -766,6 +904,15 @@ def main():
             cmd_selectors_update(args)
         else:
             print("Usage: python -m bon selectors update [--force]")
+    elif args.command == "ui-detect":
+        cmd_ui_detect(args)
+    # ── Commandes v14 ────────────────────────────────────────────────────
+    elif args.command in (
+        "add-account", "assign-proxy", "start", "stop",
+        "status", "logs", "queue", "enqueue", "health",
+    ):
+        from libs.cli_v14 import run_cli
+        run_cli(sys.argv[1:])
     elif args.command is None:
         _interactive()
     else:
@@ -774,7 +921,7 @@ def main():
 
 
 def _interactive():
-    print("BON v11 — Facebook Groups Publisher")
+    print("BON v14 — Facebook Groups Publisher Pro")
     print("=" * 40)
     robots = RobotManager().list_robots()
     if not robots:

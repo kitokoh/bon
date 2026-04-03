@@ -1,0 +1,40 @@
+{
+  "version": "2026-03",
+  "description": "Sélecteurs Facebook pour interface portugaise (Português)",
+  "selectors": {
+    "publish_button": [
+      { "type": "role",  "value": "button", "name": "Publicar" },
+      { "type": "text",  "value": "Publicar" },
+      { "type": "aria",  "value": "Publicar" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(text(), 'Publicar')]" }
+    ],
+    "display_input": [
+      { "type": "aria",  "value": "No que você está pensando?" },
+      { "type": "role",  "value": "button", "name": "Escreva" },
+      { "type": "text",  "value": "No que você está pensando?" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(@aria-label, 'pensando')]" }
+    ],
+    "input": [
+      { "type": "role",  "value": "textbox" },
+      { "type": "aria",  "value": "Escreva algo" },
+      { "type": "css",   "value": "div[role='textbox'][contenteditable='true']" },
+      { "type": "xpath", "value": "//div[@role='textbox' and @contenteditable='true']" }
+    ],
+    "show_image_input": [
+      { "type": "aria",  "value": "Foto/vídeo" },
+      { "type": "text",  "value": "Foto" },
+      { "type": "css",   "value": "[aria-label*='Foto']" },
+      { "type": "xpath", "value": "//div[contains(@aria-label, 'Foto')]" }
+    ],
+    "add_image": [
+      { "type": "css",   "value": "input[type='file'][accept*='image']" },
+      { "type": "xpath", "value": "//input[@type='file' and contains(@accept, 'image')]" }
+    ],
+    "submit": [
+      { "type": "aria",  "value": "Publicar" },
+      { "type": "role",  "value": "button", "name": "Publicar" },
+      { "type": "text",  "value": "Publicar" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(@aria-label, 'Publicar')]" }
+    ]
+  }
+}

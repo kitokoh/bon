@@ -1,0 +1,40 @@
+{
+  "version": "2026-03",
+  "description": "Sélecteurs Facebook pour interface turque (Türkçe)",
+  "selectors": {
+    "publish_button": [
+      { "type": "role",  "value": "button", "name": "Paylaş" },
+      { "type": "text",  "value": "Paylaş" },
+      { "type": "aria",  "value": "Paylaş" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(text(), 'Paylaş')]" }
+    ],
+    "display_input": [
+      { "type": "aria",  "value": "Bir şeyler yaz" },
+      { "type": "role",  "value": "button", "name": "Yaz" },
+      { "type": "text",  "value": "Bir şeyler yaz" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(@aria-label, 'Bir şeyler')]" }
+    ],
+    "input": [
+      { "type": "role",  "value": "textbox" },
+      { "type": "aria",  "value": "Bir şeyler yaz" },
+      { "type": "css",   "value": "div[role='textbox'][contenteditable='true']" },
+      { "type": "xpath", "value": "//div[@role='textbox' and @contenteditable='true']" }
+    ],
+    "show_image_input": [
+      { "type": "aria",  "value": "Fotoğraf/video" },
+      { "type": "text",  "value": "Fotoğraf" },
+      { "type": "css",   "value": "[aria-label*='Fotoğraf']" },
+      { "type": "xpath", "value": "//div[contains(@aria-label, 'Fotoğraf')]" }
+    ],
+    "add_image": [
+      { "type": "css",   "value": "input[type='file'][accept*='image']" },
+      { "type": "xpath", "value": "//input[@type='file' and contains(@accept, 'image')]" }
+    ],
+    "submit": [
+      { "type": "aria",  "value": "Paylaş" },
+      { "type": "role",  "value": "button", "name": "Paylaş" },
+      { "type": "text",  "value": "Paylaş" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(@aria-label, 'Paylaş')]" }
+    ]
+  }
+}

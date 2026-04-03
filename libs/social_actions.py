@@ -20,6 +20,7 @@ from typing import Optional, List
 try:
     from libs.timing_humanizer import human_delay, human_scroll_to_bottom
     from libs.selector_registry import SelectorRegistry
+    from libs.adaptive_selector_resolver import AdaptiveSelectorResolver
     from libs.error_handlers import check_page_state, SessionExpiredError
     from libs.log_emitter import emit
     from libs.database import get_database, BONDatabase
@@ -28,6 +29,7 @@ try:
 except ImportError:
     from timing_humanizer import human_delay, human_scroll_to_bottom
     from selector_registry import SelectorRegistry
+    from adaptive_selector_resolver import AdaptiveSelectorResolver
     from error_handlers import check_page_state, SessionExpiredError
     from log_emitter import emit
     from database import get_database, BONDatabase
@@ -108,10 +110,67 @@ class SocialActions:
         self.db           = scraper.db
         self._account     = scraper._account_name
         self.notifier     = get_notifier()
+        # Résolveur adaptatif hérité du Scraper (déjà initialisé avec le profil UI du compte)
+        self._resolver: AdaptiveSelectorResolver = getattr(scraper, "_adaptive_resolver", None)
 
     @property
     def _page(self):
         return self.scraper._page
+
+
+    # ── Résolution de sélecteurs adaptative ───────────────────────────────
+
+    def _find(self, key, extra_selectors=None, timeout=5000):
+        """Trouve un élément via resolver adaptatif > extra_selectors > registry global."""
+        page = self._page
+        if not page:
+            return None
+        candidates = []
+        if self._resolver:
+            for sel in self._resolver.get_candidates(key):
+                if sel not in candidates:
+                    candidates.append(sel)
+        for sel in (extra_selectors or []):
+            if sel not in candidates:
+                candidates.append(sel)
+        for sel in (self.selectors.get_candidates(key) if self.selectors else []):
+            if sel not in candidates:
+                candidates.append(sel)
+        for sel in candidates:
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=timeout):
+                    if self._resolver:
+                        self._resolver._health.record_success(key, sel)
+                    return el
+            except Exception:
+                continue
+        if self._resolver:
+            self._resolver._health.record_failure(key, reason="not_found_in_social_actions")
+        return None
+
+    def _find_all(self, key, extra_selectors=None, timeout=3000):
+        """Retourne tous les éléments correspondants via le resolver adaptatif."""
+        page = self._page
+        if not page:
+            return []
+        candidates = []
+        if self._resolver:
+            for sel in self._resolver.get_candidates(key):
+                if sel not in candidates:
+                    candidates.append(sel)
+        for sel in (extra_selectors or []):
+            if sel not in candidates:
+                candidates.append(sel)
+        for sel in candidates:
+            try:
+                page.wait_for_selector(sel, timeout=timeout)
+                elements = page.query_selector_all(sel)
+                if elements:
+                    return elements
+            except Exception:
+                continue
+        return []
 
     # ── Navigation humaine ────────────────────────────────────────────────
 
@@ -160,30 +219,22 @@ class SocialActions:
         human_delay(2.0, 0.5)
         check_page_state(page, robot_name=self.scraper.robot_name)
 
-        # Vérifier si déjà membre
-        for sel in SEL_ALREADY_MEMBER:
-            try:
-                el = page.locator(sel).first
-                if el.is_visible(timeout=1500):
-                    self.db.mark_subscribed(self.robot_name, group_url)
-                    return True
-            except Exception:
-                continue
+        # Vérifier si déjà membre — résolveur adaptatif + fallback liste statique
+        member_el = self._find("join_group_already_member", extra_selectors=SEL_ALREADY_MEMBER, timeout=1500)
+        if member_el:
+            self.db.mark_subscribed(self.robot_name, group_url)
+            return True
 
-        # Clic sur "Rejoindre"
-        for sel in SEL_JOIN_GROUP:
-            try:
-                btn = page.locator(sel).first
-                if btn.is_visible(timeout=2000):
-                    self.simulate_natural_browse(page, duration_s=2.0)
-                    btn.click()
-                    human_delay(2.5, 0.5)
-                    self.db.mark_subscribed(self.robot_name, group_url)
-                    emit("SUCCESS", "GROUP_SUBSCRIBED",
-                         robot=self.robot_name, group=group_url[:60])
-                    return True
-            except Exception:
-                continue
+        # Clic sur "Rejoindre" — résolveur adaptatif + fallback liste statique
+        join_btn = self._find("join_group", extra_selectors=SEL_JOIN_GROUP, timeout=2000)
+        if join_btn:
+            self.simulate_natural_browse(page, duration_s=2.0)
+            join_btn.click()
+            human_delay(2.5, 0.5)
+            self.db.mark_subscribed(self.robot_name, group_url)
+            emit("SUCCESS", "GROUP_SUBSCRIBED",
+                 robot=self.robot_name, group=group_url[:60])
+            return True
 
         emit("WARN", "JOIN_BUTTON_NOT_FOUND",
              robot=self.robot_name, group=group_url[:60])
@@ -216,27 +267,27 @@ class SocialActions:
         check_page_state(page, robot_name=self.scraper.robot_name)
         self.simulate_natural_browse(page, duration_s=random.uniform(3, 6))
 
-        for sel in SEL_COMMENT_INPUT:
+        # Résolveur adaptatif (tient compte de la langue du compte) + fallback statique
+        comment_el = self._find("comment_input", extra_selectors=SEL_COMMENT_INPUT, timeout=3000)
+        if comment_el:
             try:
-                el = page.locator(sel).first
-                if el.is_visible(timeout=3000):
-                    el.scroll_into_view_if_needed()
-                    human_delay(0.5, 0.2)
-                    el.click()
-                    human_delay(0.3, 0.1)
-                    el.press_sequentially(comment_text, delay=random.randint(40, 130))
-                    human_delay(0.5, 0.2)
-                    el.press("Enter")
-                    human_delay(2.0, 0.5)
-                    db.record_published_comment(
-                        self.robot_name, group_url or target_url,
-                        comment_text, publication_id
-                    )
-                    emit("SUCCESS", "COMMENT_PUBLISHED",
-                         robot=self.robot_name, preview=comment_text[:40])
-                    return True
-            except Exception:
-                continue
+                comment_el.scroll_into_view_if_needed()
+                human_delay(0.5, 0.2)
+                comment_el.click()
+                human_delay(0.3, 0.1)
+                comment_el.press_sequentially(comment_text, delay=random.randint(40, 130))
+                human_delay(0.5, 0.2)
+                comment_el.press("Enter")
+                human_delay(2.0, 0.5)
+                db.record_published_comment(
+                    self.robot_name, group_url or target_url,
+                    comment_text, publication_id
+                )
+                emit("SUCCESS", "COMMENT_PUBLISHED",
+                     robot=self.robot_name, preview=comment_text[:40])
+                return True
+            except Exception as e:
+                emit("WARN", "COMMENT_CLICK_ERROR", error=str(e)[:80])
 
         emit("WARN", "COMMENT_INPUT_NOT_FOUND", robot=self.robot_name)
         return False
@@ -355,18 +406,16 @@ class SocialActions:
         check_page_state(page, robot_name=self.scraper.robot_name)
         self.simulate_natural_browse(page, duration_s=2.0)
 
-        # Trouver et cliquer sur "Message"
+        # Trouver et cliquer sur "Message" (résolveur adaptatif multi-langue)
         clicked = False
-        for sel in SEL_MESSAGE_BTN:
+        msg_btn = self._find("message_btn", SEL_MESSAGE_BTN, timeout=3000)
+        if msg_btn:
             try:
-                btn = page.locator(sel).first
-                if btn.is_visible(timeout=3000):
-                    btn.click()
-                    human_delay(2.0, 0.5)
-                    clicked = True
-                    break
+                msg_btn.click()
+                human_delay(2.0, 0.5)
+                clicked = True
             except Exception:
-                continue
+                pass
 
         if not clicked:
             # Essai direct via URL Messenger
@@ -383,26 +432,22 @@ class SocialActions:
                  robot=self.robot_name, target=target_profile_url[:60])
             return False
 
-        # Zone de saisie Messenger
-        for sel in SEL_MESSENGER_INPUT:
+        # Zone de saisie Messenger — résolveur adaptatif + fallback statique
+        messenger_el = self._find("messenger_input", extra_selectors=SEL_MESSENGER_INPUT, timeout=5000)
+        if messenger_el:
             try:
-                inp = page.locator(sel).first
-                if inp.is_visible(timeout=5000):
-                    inp.click()
-                    inp.press_sequentially(text, delay=random.randint(40, 130))
-                    human_delay(0.5, 0.2)
-
-                    # Attacher médias si présents
-                    if media_paths:
-                        self._attach_dm_media(page, media_paths)
-
-                    inp.press("Enter")
-                    human_delay(2.0, 0.5)
-                    emit("SUCCESS", "DM_SENT",
-                         robot=self.robot_name, target=target_profile_url[:60])
-                    return True
-            except Exception:
-                continue
+                messenger_el.click()
+                messenger_el.press_sequentially(text, delay=random.randint(40, 130))
+                human_delay(0.5, 0.2)
+                if media_paths:
+                    self._attach_dm_media(page, media_paths)
+                messenger_el.press("Enter")
+                human_delay(2.0, 0.5)
+                emit("SUCCESS", "DM_SENT",
+                     robot=self.robot_name, target=target_profile_url[:60])
+                return True
+            except Exception as e:
+                emit("WARN", "DM_SEND_ERROR", error=str(e)[:80])
 
         emit("WARN", "DM_INPUT_NOT_FOUND", robot=self.robot_name)
         return False

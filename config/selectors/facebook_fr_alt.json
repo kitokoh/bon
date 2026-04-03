@@ -1,0 +1,43 @@
+{
+  "version": "2026-03",
+  "description": "Sélecteurs Facebook variante A/B 'alt' — interface française (data-testid stables)",
+  "selectors": {
+    "publish_button": [
+      {"type": "testid", "value": "react-composer-post-button"},
+      {"type": "role", "value": "button", "name": "Publier"},
+      {"type": "text", "value": "Publier"},
+      {"type": "aria", "value": "Publier"},
+      {"type": "xpath", "value": "//div[@role='button' and contains(text(), 'Publier')]"}
+    ],
+    "display_input": [
+      {"type": "css", "value": "div[data-pagelet='FeedComposer']"},
+      {"type": "aria", "value": "Écrire quelque chose"},
+      {"type": "text", "value": "Écrire quelque chose"},
+      {"type": "xpath", "value": "//div[@data-pagelet='FeedComposer']//div[@role='button']"}
+    ],
+    "input": [
+      {"type": "css", "value": "div[aria-label*='composer'][contenteditable='true']"},
+      {"type": "role", "value": "textbox"},
+      {"type": "aria", "value": "Écrire"},
+      {"type": "css", "value": "div[role='textbox'][contenteditable='true']"},
+      {"type": "xpath", "value": "//div[@role='textbox' and @contenteditable='true']"}
+    ],
+    "show_image_input": [
+      {"type": "aria", "value": "Photo/vidéo"},
+      {"type": "text", "value": "Photo"},
+      {"type": "css", "value": "[aria-label*='Photo']"},
+      {"type": "xpath", "value": "//div[contains(@aria-label, 'Photo')]"}
+    ],
+    "add_image": [
+      {"type": "css", "value": "input[type='file'][accept*='image']"},
+      {"type": "xpath", "value": "//input[@type='file' and contains(@accept, 'image')]"}
+    ],
+    "submit": [
+      {"type": "testid", "value": "react-composer-post-button"},
+      {"type": "aria", "value": "Publier"},
+      {"type": "role", "value": "button", "name": "Publier"},
+      {"type": "text", "value": "Publier"},
+      {"type": "xpath", "value": "//div[@role='button' and contains(@aria-label, 'Publier')]"}
+    ]
+  }
+}

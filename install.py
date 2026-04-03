@@ -11,6 +11,7 @@ import sys
 import subprocess
 import pathlib
 import platform
+import shutil
 
 ROOT = pathlib.Path(__file__).parent
 VENV_DIR = ROOT / ".venv"
@@ -94,6 +95,26 @@ def main():
         print("✗ Échec de l'installation de Playwright.")
         sys.exit(1)
     print("✓ Playwright Chromium installé.")
+
+    # 5. Copier les fichiers de sélecteurs JSON vers le répertoire runtime
+    print("\n[5/5] Copie des sélecteurs JSON vers le répertoire de config runtime...")
+    if sys.platform == "win32":
+        config_base = pathlib.Path.home() / "AppData" / "Roaming" / "bon"
+    elif sys.platform == "darwin":
+        config_base = pathlib.Path.home() / "Library" / "Application Support" / "bon"
+    else:
+        config_base = pathlib.Path.home() / ".config" / "bon"
+    dst_sel = config_base / "config" / "selectors"
+    dst_sel.mkdir(parents=True, exist_ok=True)
+    src_sel = ROOT / "config" / "selectors"
+    if src_sel.exists():
+        copied = 0
+        for f in src_sel.glob("*.json"):
+            shutil.copy2(f, dst_sel / f.name)
+            copied += 1
+        print(f"✓ {copied} fichier(s) JSON copiés vers {dst_sel}")
+    else:
+        print("⚠ Répertoire config/selectors/ introuvable — sélecteurs non copiés.")
 
     # Résumé
     print("\n" + "==" * 28)

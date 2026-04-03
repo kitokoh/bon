@@ -1,0 +1,58 @@
+{
+  "version": "2026-03",
+  "description": "Sélecteurs Facebook variante LEGACY — vieux comptes (interface pré-2022) — langue pt. Sélecteurs data-testid language-agnostic.",
+  "selectors": {
+    "publish_button": [
+      { "type": "css",   "value": "button[data-testid='react-composer-post-button']" },
+      { "type": "css",   "value": "button[name='__CONFIRM__']" },
+      { "type": "xpath", "value": "//button[@type='submit']" },
+      { "type": "css",   "value": "._1mf7._4jy0._4jy3._4jy1.selected._51sy" },
+      { "type": "xpath", "value": "//button[contains(@class, '_42ft') and contains(@class, '_4jy0')]" }
+    ],
+    "display_input": [
+      { "type": "css",   "value": "[data-testid='status-attachment-mentions-input']" },
+      { "type": "css",   "value": "#composerInput" },
+      { "type": "css",   "value": "div._5rpu" },
+      { "type": "css",   "value": "div.UFIInputContainer div[contenteditable='true']" },
+      { "type": "xpath", "value": "//div[@id='pagelet_composer']//div[@role='button']" },
+      { "type": "css",   "value": "div[data-testid='react-composer-root'] div[role='button']" }
+    ],
+    "input": [
+      { "type": "css",   "value": "div[data-testid='react-composer-root'] div[contenteditable='true']" },
+      { "type": "css",   "value": "div._5rpu[contenteditable='true']" },
+      { "type": "css",   "value": "div.notranslate[contenteditable='true']" },
+      { "type": "css",   "value": "textarea[name='xhpc_message']" },
+      { "type": "css",   "value": "#composerInput" },
+      { "type": "xpath", "value": "//div[@role='textbox' and @contenteditable='true']" }
+    ],
+    "show_image_input": [
+      { "type": "css",   "value": "[data-testid='photo-attachment-button']" },
+      { "type": "css",   "value": "div._4f9o[aria-label]" },
+      { "type": "css",   "value": "a[data-testid='photo-video-button']" },
+      { "type": "xpath", "value": "//div[@data-testid='photo-attachment-button']" },
+      { "type": "css",   "value": "div[role='button']._47d4._4p_v" }
+    ],
+    "add_image": [
+      { "type": "css",   "value": "input[type='file'][accept*='image']" },
+      { "type": "css",   "value": "input[type='file']" },
+      { "type": "xpath", "value": "//input[@type='file']" }
+    ],
+    "submit": [
+      { "type": "css",   "value": "button[data-testid='react-composer-post-button']" },
+      { "type": "css",   "value": "button._1mf7._4jy0._4jy3._4jy1.selected._51sy" },
+      { "type": "css",   "value": "div._4jy0._4jy3._4jy1.selected._51sy" },
+      { "type": "xpath", "value": "//button[@type='submit' and not(@disabled)]" }
+    ],
+    "comment_input": [
+      { "type": "css",   "value": "div.UFIInputContainer div[contenteditable='true']" },
+      { "type": "css",   "value": "div[data-testid='comment-composer'] div[contenteditable='true']" },
+      { "type": "css",   "value": "form._4-ko div[contenteditable='true']" },
+      { "type": "xpath", "value": "//div[contains(@class, 'UFICommentContentBlock')]//div[@contenteditable='true']" }
+    ],
+    "join_group": [
+      { "type": "css",   "value": "a[data-testid='group-join-button']" },
+      { "type": "css",   "value": "button[data-testid='group-join-button']" },
+      { "type": "xpath", "value": "//a[contains(@class, '_42ft') and contains(text(), 'Rejoindre')]" }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "version": "2026-03",
+  "description": "Sélecteurs Facebook pour interface russe (Русский)",
+  "selectors": {
+    "publish_button": [
+      { "type": "role",  "value": "button", "name": "Опубликовать" },
+      { "type": "text",  "value": "Опубликовать" },
+      { "type": "aria",  "value": "Опубликовать" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(text(), 'Опубликовать')]" }
+    ],
+    "display_input": [
+      { "type": "aria",  "value": "О чём вы думаете?" },
+      { "type": "role",  "value": "button", "name": "Написать" },
+      { "type": "text",  "value": "О чём вы думаете?" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(@aria-label, 'думаете')]" }
+    ],
+    "input": [
+      { "type": "role",  "value": "textbox" },
+      { "type": "aria",  "value": "Написать что-нибудь" },
+      { "type": "css",   "value": "div[role='textbox'][contenteditable='true']" },
+      { "type": "xpath", "value": "//div[@role='textbox' and @contenteditable='true']" }
+    ],
+    "show_image_input": [
+      { "type": "aria",  "value": "Фото/видео" },
+      { "type": "text",  "value": "Фото" },
+      { "type": "css",   "value": "[aria-label*='Фото']" },
+      { "type": "xpath", "value": "//div[contains(@aria-label, 'Фото')]" }
+    ],
+    "add_image": [
+      { "type": "css",   "value": "input[type='file'][accept*='image']" },
+      { "type": "xpath", "value": "//input[@type='file' and contains(@accept, 'image')]" }
+    ],
+    "submit": [
+      { "type": "aria",  "value": "Опубликовать" },
+      { "type": "role",  "value": "button", "name": "Опубликовать" },
+      { "type": "text",  "value": "Опубликовать" },
+      { "type": "xpath", "value": "//div[@role='button' and contains(@aria-label, 'Опубликовать')]" }
+    ]
+  }
+}
