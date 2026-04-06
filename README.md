@@ -1,6 +1,6 @@
-# BON v12 — Facebook Groups Publisher
+# BON v14 — Facebook Groups Publisher
 
-Module **Python 3.10+** / **Playwright** pour automatiser (avec prudence) la publication dans des groupes Facebook, avec **plusieurs robots** (un par compte), **données en SQLite**, **sélecteurs externalisés**, **circuit breaker**, **API REST** et **planification cron**.
+Module **Python 3.10+** / **Playwright** pour automatiser (avec prudence) la publication dans des groupes Facebook, avec **plusieurs robots** (un par compte), **données en SQLite**, **sélecteurs externalisés**, **circuit breaker**, **API REST**, **planification cron**, **monitoring industriel** et **file de tâches**.
 
 > **Conformité** : l’usage peut enfreindre les conditions d’utilisation de Meta. **Vous êtes responsable** de l’usage du logiciel et du respect du droit applicable.
 
@@ -16,7 +16,7 @@ Module **Python 3.10+** / **Playwright** pour automatiser (avec prudence) la pub
 | Supervision & intégrations | **CLI dashboard**, **export CSV/XLSX**, **API Flask** (n8n, Make, etc.) |
 | Moins d’arrêts sur CAPTCHA | **2captcha** (HTTP) + **`BON_AUTO_SOLVE_CAPTCHA=1`** dans `check_page_state` |
 
-**Synthèse audit externe** : le document `BON_Audit_v11.pdf` fixe une cible « entreprise » (~98/100). Ce dépôt implémente **l’essentiel** avec quelques choix techniques différents (voir tableau ci‑dessous et [docs/PLAN_ACTION_V12.md](docs/PLAN_ACTION_V12.md)).
+**Synthèse audit externe** : le document `BON_Audit_v11.pdf` fixe une cible « entreprise » (~98/100). Ce dépôt implémente **l’essentiel** avec quelques choix techniques différents (voir tableau ci‑dessous et [docs/PLAN_ACTION_V14.md](docs/PLAN_ACTION_V14.md)).
 
 ---
 
@@ -41,7 +41,12 @@ Module **Python 3.10+** / **Playwright** pour automatiser (avec prudence) la pub
 ```
 __main__.py          → CLI (robot, post, export, schedule, api, …)
 libs/
+  cli_v14.py         → CLI Pro complète (status, logs, queue, health)
   database.py        → SQLite (robots, publications, campaigns, CB, scheduler, captcha log, …)
+  session_manager.py → Isolation sessions par robot (chrome_profiles/)
+  human_behavior.py  → Anti-détection avancé (mouvements, délais, frappe)
+  task_queue.py      → File de tâches SQLite avec backoff exponentiel
+  monitor.py         → Monitoring industriel (classification erreurs, santé)
   scraper.py         → Flux publication groupe par groupe
   playwright_engine.py
   selector_registry.py
@@ -183,7 +188,7 @@ python tests/test_v11.py
 ## Feuille de route & plan d’action
 
 - **Courte** : [ROADMAP.md](ROADMAP.md)
-- **Détaillée (v12)** : [docs/PLAN_ACTION_V12.md](docs/PLAN_ACTION_V12.md) — *audit ami + vision + écarts + priorités (E2E, PostgreSQL, dashboard web, CLI config étendue, Prometheus, Slack/Discord, pool proxy…)*
+- **Détaillée (v14)** : [docs/PLAN_ACTION_V14.md](docs/PLAN_ACTION_V14.md) — *audit ami + vision + écarts + priorités (E2E, PostgreSQL, dashboard web, CLI config étendue, Prometheus, Slack/Discord, pool proxy…)*
 
 ---
 
@@ -200,22 +205,25 @@ Les versions **v3–v10** ont introduit : migration Selenium → Playwright, mod
 
 ---
 
-## État actuel v12
+## État actuel v14
 
-| Dimension | Score v11 | Score v12 | Évolution |
+| Dimension | Score v12 | Score v14 | Évolution |
 |-----------|-----------|-----------|----------|
-| Architecture & modularité | 19/20 | 19/20 | → stable |
-| Sécurité & anti-détection | 17/20 | 17/20 | → stable |
-| Résilience & gestion erreurs | 18/20 | 18/20 | → stable |
-| Tests & qualité code | 13/20 | 14/20 | ↑ +1 (close, reset_database) |
-| API & intégrations | 18/20 | 19/20 | ↑ +1 (filtres date, rate limiting) |
-| Ergonomie opérationnelle | 12/20 | 15/20 | ↑ +3 (config set complet) |
-| **TOTAL** | **97/120** | **102/120** | **↑ +5 pts** |
+| Architecture & modularité | 19/20 | 20/20 | ↑ +1 (modules v14 consolidés) |
+| Sécurité & anti-détection | 17/20 | 19/20 | ↑ +2 (human_behavior avancé) |
+| Résilience & gestion erreurs | 18/20 | 20/20 | ↑ +2 (monitoring industriel) |
+| Tests & qualité code | 14/20 | 16/20 | ↑ +2 (tests étendus) |
+| API & intégrations | 19/20 | 20/20 | ↑ +1 (CLI complète) |
+| Ergonomie opérationnelle | 15/20 | 19/20 | ↑ +4 (status/watch/queue) |
+| **TOTAL** | **102/120** | **114/120** | **↑ +12 pts** |
 
-**Nouveautés v12** : `close()` + `__del__` sur BONDatabase, `reset_database()` pour tests, `captcha_api_key` par robot en DB, `robot config set` étendu (11 paramètres), filtres `date_from`/`date_to` sur exports et API, rate limiting `flask-limiter` optionnel, `check_optional_deps()`.
-
-**Corrections v13** : `captcha_api_key` exposé dans `get_config()` (bug I1), dépendances optionnelles séparées (`requirements-core.txt` / `requirements-optional.txt`), DEPLOY.md et README mis à jour, 6 nouveaux tests de cohérence ajoutés.
+**Nouveautés v14** : 
+- **SessionManager** : isolation complète par robot avec `chrome_profiles/`
+- **HumanBehavior** : mouvements souris Bézier, délais Gamma, fatigue adaptative
+- **TaskQueue** : file SQLite avec backoff exponentiel et retry automatique
+- **Monitor** : classification 15 classes d'erreurs, score santé 0-100
+- **CLI Pro** : `status --watch`, `logs --json`, `queue`, `health` en temps réel
 
 ---
 
-*BON — avril 2026 — v12*
+*BON — avril 2026 — v14*

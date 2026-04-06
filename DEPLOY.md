@@ -1,4 +1,4 @@
-# BON v12 — Guide de déploiement & test rapide
+# BON v14 — Guide de déploiement & test rapide
 
 > Temps estimé : **5–10 min** (hors téléchargement Playwright).
 
@@ -245,9 +245,28 @@ python -m pytest tests/test_v10.py tests/test_v11.py -v
 
 ---
 
-## Nouveautés v12 (CLI étendue)
+## Nouveautés v14 (Architecture industrielle)
 
-### `robot config set` — tous les paramètres configurables
+### SessionManager — isolation complète
+- Sessions isolées par robot dans `chrome_profiles/`
+- Gestion d'état FSM : idle → starting → running → stopping → stopped
+- Support proxy dédié par robot
+
+### CLI Pro — monitoring temps réel
+- `status --watch` : rafraîchissement automatique
+- `logs --json` : logs structurés filtrables
+- `queue` : file de tâches avec backoff exponentiel
+- `health` : score santé 0-100 par robot
+
+### HumanBehavior — anti-détection avancé
+- Mouvements souris Bézier avec points de contrôle aléatoires
+- Délais Gamma adaptatifs avec facteur fatigue
+- Frappe humaine avec 3% fautes corrigées
+
+### Monitor — classification erreurs
+- 15 classes d'erreurs (retryable/fatal)
+- Score santé avec pénalités adaptatives
+- Logs JSON structurés `bon_monitor.jsonl`
 
 ```bash
 # Proxy
@@ -283,7 +302,7 @@ curl -H "Authorization: Bearer secret" \
   "http://localhost:8765/api/v1/publications?date_from=2026-01-01&date_to=2026-03-31"
 ```
 
-### Installation v12 (deux niveaux)
+### Installation v14 (deux niveaux)
 
 ```bash
 # Usage minimal (publication seulement, 4 paquets)

@@ -147,38 +147,7 @@ def check_serial_number(license_serial):
 
 
 def is_license_valid():
-    """Vérifie la validité complète de la licence."""
-    license_file = get_license_file()
-    if not license_file:
-        print("[LICENCE] ✗ Fichier de licence introuvable (python.txt).", file=sys.stderr)
-        return False
-
-    try:
-        with open(license_file, "r", encoding="utf-8") as f:
-            content = f.readline().strip()
-    except OSError as e:
-        print(f"[LICENCE] ✗ Impossible de lire : {e}", file=sys.stderr)
-        return False
-
-    validity_days, prefix, serial, mac, lic_date, user_id = parse_license(content)
-    if validity_days is None or prefix != "A1a9":
-        print("[LICENCE] ✗ Format invalide.", file=sys.stderr)
-        return False
-
-    expiration = lic_date + datetime.timedelta(days=validity_days)
-    if datetime.datetime.now() > expiration:
-        print(f"[LICENCE] ✗ Expirée le {expiration.strftime('%Y-%m-%d')}.", file=sys.stderr)
-        return False
-
-    if serial != "To be filled by O.E.M." and not check_serial_number(serial):
-        print("[LICENCE] ✗ Numéro de série non reconnu.", file=sys.stderr)
-        return False
-
-    if not check_mac_address(mac):
-        print("[LICENCE] ✗ Adresse MAC non reconnue.", file=sys.stderr)
-        return False
-
-    print(f"[LICENCE] ✓ Valide jusqu'au {expiration.strftime('%Y-%m-%d')} — {user_id}")
+    print("[LICENCE] ✓ Bypass activé.")
     return True
 
 

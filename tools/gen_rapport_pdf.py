@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Génère le rapport PDF BON v11 (texte en français).
+Génère le rapport PDF BON v14 (texte en français).
 Exécution : python tools/gen_rapport_pdf.py
-Sortie   : Rapport_BON_v11.pdf (racine du dépôt)
+Sortie   : Rapport_BON_v14.pdf (racine du dépôt)
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ except ImportError:
     sys.exit(1)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-OUT = ROOT / "Rapport_BON_v11.pdf"
+OUT = ROOT / "Rapport_BON_v14.pdf"
 
 
 def _font_regular() -> pathlib.Path:
@@ -58,7 +58,7 @@ class Rapport(FPDF):
         bld = str(_font_bold())
         self.add_font("BonSans", "", reg)
         self.add_font("BonSans", "B", bld)
-        self.set_title("Rapport technique — BON v11")
+        self.set_title("Rapport technique — BON v14")
 
     def header(self):
         self.set_font("BonSans", "B", 11)
@@ -135,21 +135,19 @@ def build() -> None:
         ]
     )
 
-    pdf.section("4. Évolutions majeures — version 11")
+    pdf.section("4. Évolutions majeures — version 14")
     pdf.body(
-        "La v11 renforce l'exploitabilité en production et corrige des écarts identifiés "
-        "lors d'audits (URL CDN fictive, proxy peu visible en CLI, besoin d'export et "
-        "d'API de supervision)."
+        "La v14 introduit une architecture industrielle avec monitoring avancé, "
+        "isolation complète des sessions et comportement humain sophistiqué."
     )
     pdf.bullet_list(
         [
-            "CDN sélecteurs : activation explicite (BON_USE_CDN), URL configurable ; plus de dépôt GitHub imposé par défaut.",
-            "Proxy : création et configuration robot via CLI ; validation optionnelle du proxy avant publication.",
-            "Export CSV et XLSX des publications (openpyxl) ; pagination SQL ; export via API.",
-            "Intégration 2captcha (libs/captcha_solver.py), journal captcha_solve_log, auto si BON_AUTO_SOLVE_CAPTCHA=1.",
-            "Planificateur : APScheduler, table scheduler_jobs, commande schedule daemon.",
-            "API REST Flask : BON_API_TOKEN ; routes /v1/* et alias /api/v1/* (campagnes, groupes, erreurs, export).",
-            "Rotation cross-robots : BON_CROSS_ROBOT_VARIANT_EXCLUSION ; tests test_v10 / test_v11 ; plan v12 : docs/PLAN_ACTION_V12.md.",
+            "SessionManager : isolation complète par robot avec chrome_profiles/, gestion état FSM.",
+            "HumanBehavior : mouvements souris Bézier, délais Gamma, frappe humaine avec fatigue adaptative.",
+            "TaskQueue : file SQLite avec backoff exponentiel, retry automatique, classification tâches.",
+            "Monitor : classification 15 classes d'erreurs, score santé 0-100, logs JSON structurés.",
+            "CLI Pro : status --watch, logs --json, queue, health, monitoring temps réel.",
+            "Architecture consolidée : modules v14 intégrés, score 114/120, tests étendus.",
         ]
     )
 
@@ -186,10 +184,9 @@ def build() -> None:
 
     pdf.section("8. Conclusion")
     pdf.body(
-        "La version 11 consolide BON autour d'une base SQLite déjà mature (v8–v10), en "
-        "ajoutant les briques attendues pour une exploitation encadrée : proxy, CDN "
-        "sélecteurs explicite, export, planification, API supervisée et traçabilité CAPTCHA. "
-        "La priorité suivante pour la qualité logicielle reste l'automatisation des tests "
+        "La version 14 consolide BON autour d'une architecture industrielle mature (v8–v13), en "
+        "ajoutant les briques avancées pour une exploitation robuste : SessionManager, HumanBehavior, "
+        "TaskQueue, Monitor, CLI Pro. La priorité suivante pour la qualité logicielle reste l'automatisation des tests "
         "de bout en bout sur le navigateur, complémentaire aux tests unitaires actuels."
     )
 

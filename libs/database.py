@@ -1,5 +1,5 @@
 """
-database.py v11 — Source de vérité UNIQUE (tout en SQL, zéro JSON métier)
+database.py v14 — Source de vérité UNIQUE (tout en SQL, zéro JSON métier)
 
 Modèle conceptuel v9 :
   Robot   = instance nommée (robot1, robot2...) liée à 1 compte Facebook
@@ -394,7 +394,7 @@ class BONDatabase:
                 value TEXT NOT NULL,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
 
-            # Journal tentatives résolution CAPTCHA (v11)
+            # Journal tentatives résolution CAPTCHA (v14)
             """CREATE TABLE IF NOT EXISTS captcha_solve_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 robot_name TEXT,
@@ -403,7 +403,7 @@ class BONDatabase:
                 error_message TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP)""",
 
-            # Jobs planificateur APScheduler (v11)
+            # Jobs planificateur APScheduler (v14)
             """CREATE TABLE IF NOT EXISTS scheduler_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id TEXT UNIQUE NOT NULL,
@@ -435,7 +435,7 @@ class BONDatabase:
                 conn.execute(stmt)
             conn.commit()
             self._apply_migrations(conn)
-            emit("INFO", "DATABASE_INITIALIZED_V11", path=str(self.db_path))
+            emit("INFO", "DATABASE_INITIALIZED_V14", path=str(self.db_path))
 
     def _apply_migrations(self, conn):
         """Migrations idempotentes — silencieuses si colonne déjà présente."""
@@ -1401,7 +1401,7 @@ class BONDatabase:
         return {r["key"]: r["value"] for r in self._query("SELECT key,value FROM config_kv")}
 
     # ══════════════════════════════════════════
-    # CAPTCHA LOG (v11)
+    # CAPTCHA LOG (v14)
     # ══════════════════════════════════════════
 
     def log_captcha_event(self, robot_name, solve_type, status, error_message=None) -> None:
@@ -1420,7 +1420,7 @@ class BONDatabase:
         )
 
     # ══════════════════════════════════════════
-    # SCHEDULER JOBS (v11)
+    # SCHEDULER JOBS (v14)
     # ══════════════════════════════════════════
 
     def scheduler_upsert_job(
@@ -1480,7 +1480,7 @@ class BONDatabase:
             )
 
     # ══════════════════════════════════════════
-    # EXPORT / PAGINATION PUBLICATIONS (v11)
+    # EXPORT / PAGINATION PUBLICATIONS (v14)
     # ══════════════════════════════════════════
 
     def _publication_export_rows(

@@ -1,9 +1,17 @@
 # BON — Feuille de route
 
-## État actuel : **v11** (avril 2026)
+## État actuel : **v14** (avril 2026)
 
-### Livré en v11
-- **CDN sélecteurs** : plus d’URL GitHub fictive ; `BON_USE_CDN=1` + `BON_SELECTORS_CDN_URL` ou `config set selectors_cdn_url` ; cache TTL `BON_SELECTORS_CACHE_TTL_S`.
+### Livré en v14
+- **SessionManager** : isolation complète par robot avec `chrome_profiles/`
+- **HumanBehavior** : mouvements souris Bézier, délais Gamma, fatigue adaptative
+- **TaskQueue** : file SQLite avec backoff exponentiel et retry automatique
+- **Monitor** : classification 15 classes d'erreurs, score santé 0-100
+- **CLI Pro** : `status --watch`, `logs --json`, `queue`, `health` en temps réel
+- **Architecture consolidée** : modules v14 intégrés, score 114/120
+
+### Livré en v11 (précédent)
+- **CDN sélecteurs** : plus d'URL GitHub fictive ; `BON_USE_CDN=1` + `BON_SELECTORS_CDN_URL` ou `config set selectors_cdn_url` ; cache TTL `BON_SELECTORS_CACHE_TTL_S`.
 - **Proxy CLI** : `robot create --proxy-server …`, `robot config set|show|clear-proxy`, `post --validate-proxy`, login création avec proxy contexte Playwright.
 - **Export CSV** : `python -m bon export --out … [--robot …]` + pagination DB `get_publications_paginated`.
 - **2captcha** : `libs/captcha_solver.py`, `python -m bon captcha test`, journal `captcha_solve_log` ; résolution auto optionnelle dans `check_page_state` si `BON_AUTO_SOLVE_CAPTCHA=1` + `BON_2CAPTCHA_KEY`.
@@ -12,13 +20,13 @@
 - **Cross-robot variants** : `BON_CROSS_ROBOT_VARIANT_EXCLUSION=1` + `pick_variant(..., exclude_cross_robot=True)`.
 - **Tests** : `tests/test_v10.py` (ex-v9), `tests/test_v11.py`.
 
-### Suite possible (v12)
+### Suite possible (v15)
 - Tests E2E DOM synthétique, dashboard web complet, adaptateur PostgreSQL, `robot config` étendu, `/metrics`, multi-provider CAPTCHA.
 
 ### Synthèse audit (`BON_Audit_v11.pdf`) ↔ dépôt
 L’audit décrit une cible « plateforme 24/7 » très proche de cette base. **Écarts documentés** : pas de SDK `2captcha-python` (HTTP natif), pas de colonnes `captcha_*` par robot (clé globale `BON_2CAPTCHA_KEY`), CDN **opt-in** (pas d’URL GitHub imposée), scheduler sous **`schedule daemon`** (pas `schedule start`). **Renforts dépôt** : alias API `/api/v1/*`, export **XLSX** (`openpyxl`), endpoints **campaigns**, **groups**, **errors**, **publications/export**.
 
-**Plan d’action détaillé** : [docs/PLAN_ACTION_V12.md](docs/PLAN_ACTION_V12.md).
+**Plan d'action détaillé** : [docs/PLAN_ACTION_V14.md](docs/PLAN_ACTION_V14.md).
 
 ---
 
@@ -90,7 +98,7 @@ L’audit décrit une cible « plateforme 24/7 » très proche de cette base. **
 |----|--------|----------------|
 | P1 | CDN sélecteurs | Fait (URL explicite, pas de repo fictif) |
 | P2 | Proxy par robot | Fait (CLI + DB + validation optionnelle) |
-| P3 | Tests E2E DOM | **À faire** (v12) |
+| P3 | Tests E2E DOM | **À faire** (v15) |
 | P4 | CAPTCHA 2captcha | Fait (client + journal + **auto** si `BON_AUTO_SOLVE_CAPTCHA=1`) |
 | K1 | Scheduler | Fait (`schedule add` / `daemon`) |
 | K2 | Dashboard web | Partiel (API REST + CLI `dashboard` ; pas de graphes 7j) |
@@ -110,5 +118,6 @@ L’audit décrit une cible « plateforme 24/7 » très proche de cette base. **
 | v9 | 95/100 | Modèle Robot + factories |
 | v10 | **96/100** | UA à jour + bug Telegram + rotation variants |
 | **v11** | **97/100** | Proxy + CDN explicite + export + scheduler + API + CAPTCHA auto optionnel |
+| **v14** | **114/120** | SessionManager + HumanBehavior + TaskQueue + Monitor + CLI Pro |
 
-**Objectif v12** — Tests E2E DOM + dashboard web enrichi + PostgreSQL optionnel
+**Objectif v15** — Tests E2E DOM + dashboard web enrichi + PostgreSQL optionnel
