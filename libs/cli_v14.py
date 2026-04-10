@@ -22,6 +22,8 @@ PHASE 6 : CLI pro
 
 import argparse
 import json
+import os
+import pathlib
 import sys
 import time
 import threading
@@ -70,6 +72,536 @@ def _fmt_ts(ts: Optional[str]) -> str:
 
 def _health_icon(status: str) -> str:
     return {"healthy": "✓", "degraded": "⚠", "critical": "✗", "dead": "☠"}.get(status, "?")
+
+
+def _prompt_input(prompt: str, default: Optional[str] = None, required: bool = False) -> str:
+    """Lit une saisie interactive avec valeur par défaut optionnelle."""
+    suffix = f" [{default}]" if default is not None and default != "" else ""
+    while True:
+        try:
+            value = input(f"{prompt}{suffix}: ").strip()
+        except EOFError:
+            value = ""
+        if value:
+            return value
+        if default is not None:
+            return str(default)
+        if not required:
+            return ""
+        print("  Une valeur est requise.")
+
+
+def _prompt_int(prompt: str, default: int) -> int:
+    while True:
+        raw = _prompt_input(prompt, default=str(default))
+        try:
+            return int(raw)
+        except ValueError:
+            print("  Merci d'entrer un nombre valide.")
+
+
+def _prompt_yes_no(prompt: str, default_yes: bool = False) -> bool:
+    default = "y" if default_yes else "n"
+    while True:
+        raw = _prompt_input(prompt, default=default).strip().lower()
+        if raw in {"y", "yes", "o", "oui"}:
+            return True
+        if raw in {"n", "no", "non"}:
+            return False
+        print("  Réponds par oui/non (y/n).")
+
+
+def _split_urls(raw: str) -> List[str]:
+    return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
+def _ensure_robot_session(robot_name: str):
+    """Crée une session logique si le robot n'existe pas encore en base."""
+    sm = get_session_manager()
+    session = sm.create_session(robot_name, from_db=True)
+    return sm, session
+
+
+def _choose_robot_name(db, prompt: str = "Robot") -> Optional[str]:
+    """Choisit automatiquement le seul robot si possible, sinon demande un choix."""
+    robots = db.get_all_robots()
+    if not robots:
+        return None
+    if len(robots) == 1:
+        return robots[0]["robot_name"]
+
+    print(f"  Robots disponibles ({len(robots)}) :")
+    for idx, robot in enumerate(robots, start=1):
+        account = robot.get("account_name", "—")
+        print(f"  {idx}) {robot['robot_name']}  [{account}]")
+
+    while True:
+        raw = _prompt_input(prompt, default="1")
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(robots):
+                return robots[idx - 1]["robot_name"]
+        for robot in robots:
+            if raw == robot["robot_name"]:
+                return robot["robot_name"]
+        print("  Choix invalide.")
+
+
+def _get_current_browser_url(robot_name: str) -> str:
+    """Retourne l'URL actuelle du navigateur du robot si disponible."""
+    try:
+        sm = get_session_manager()
+        session = sm.get_session(robot_name)
+        if not session or not session._browser_ctx:
+            return ""
+        pages = getattr(session._browser_ctx, "pages", []) or []
+        if not pages:
+            return ""
+        return getattr(pages[0], "url", "") or ""
+    except Exception:
+        return ""
+
+
+def _looks_like_checkpoint(url: str) -> bool:
+    url = (url or "").lower()
+    return "two_step_verification" in url or "checkpoint" in url or "authentication" in url
+
+
+def _looks_blank(url: str) -> bool:
+    url = (url or "").strip().lower()
+    return not url or url == "about:blank"
+
+
+def _pick_active_page(context):
+    """Essaie de sélectionner l'onglet réellement utile du contexte."""
+    pages = getattr(context, "pages", []) or []
+    if not pages:
+        return context.new_page()
+
+    for page in pages:
+        try:
+            url = getattr(page, "url", "") or ""
+            if not _looks_blank(url):
+                return page
+        except Exception:
+            continue
+
+    return pages[0]
+
+
+def _wait_for_page_ready(page, robot_name: str, context_label: str = "publication") -> None:
+    """
+    Attend que la page Playwright quitte un écran de login / checkpoint.
+
+    Utilisé pendant les workflows de publication pour laisser l'utilisateur
+    terminer la connexion Facebook dans la fenêtre ouverte.
+    """
+    try:
+        current_url = getattr(page, "url", "") or ""
+    except Exception:
+        current_url = ""
+
+    if _looks_blank(current_url):
+        print("\n  Facebook est en train d'ouvrir la page de connexion.")
+        print(f"  Robot: {robot_name}")
+        print("  Si la fenêtre est encore blanche, attends le chargement ou termine la connexion.")
+        wait_s = max(1, int(os.getenv("BON_START_WATCH_INTERVAL_S", "5")))
+        try:
+            while True:
+                try:
+                    current_url = getattr(page, "url", "") or ""
+                except Exception:
+                    current_url = ""
+                if not _looks_blank(current_url):
+                    break
+                print(f"  ⏳ {robot_name}: page vide / chargement en cours")
+                time.sleep(wait_s)
+        except KeyboardInterrupt:
+            print("\n  Attente interrompue par l'utilisateur.")
+            return
+
+    if not _looks_like_checkpoint(current_url):
+        return
+
+    print("\n  Facebook a ouvert un écran de vérification / checkpoint.")
+    print(f"  Robot: {robot_name}")
+    if current_url:
+        print(f"  URL  : {current_url}")
+    print("  Termine la connexion / vérification dans la fenêtre puis reviens ici.")
+    print("  Le flux attendra tant que la page reste sur cet écran.")
+
+    wait_s = max(1, int(os.getenv("BON_START_WATCH_INTERVAL_S", "5")))
+    try:
+        while True:
+            try:
+                current_url = getattr(page, "url", "") or ""
+            except Exception:
+                current_url = ""
+            if not _looks_like_checkpoint(current_url):
+                print(f"  ✓ {context_label} prête pour {robot_name}.")
+                if current_url:
+                    print(f"  URL actuelle: {current_url}")
+                return
+            print(f"  ⏳ {robot_name}: checkpoint toujours actif")
+            if current_url:
+                print(f"     URL: {current_url}")
+            time.sleep(wait_s)
+    except KeyboardInterrupt:
+        print("\n  Attente interrompue par l'utilisateur.")
+
+
+def _wait_for_checkpoint_release(robot_name: str, poll_s: int = 5) -> None:
+    """Surveille la page jusqu'à la sortie du checkpoint Facebook."""
+    print("\n  Mode watch checkpoint actif.")
+    print("  Laisse la fenêtre Facebook ouverte et termine la vérification.")
+    print("  Ctrl+C pour interrompre la surveillance.")
+
+    try:
+        while True:
+            url = _get_current_browser_url(robot_name)
+            if not _looks_like_checkpoint(url):
+                print(f"  ✓ Vérification terminée pour {robot_name}.")
+                if url:
+                    print(f"  URL actuelle: {url}")
+                return
+
+            print(f"  ⏳ {robot_name}: checkpoint détecté")
+            if url:
+                print(f"     URL: {url}")
+            time.sleep(max(1, poll_s))
+    except KeyboardInterrupt:
+        print("\n  Surveillance arrêtée par l'utilisateur.")
+
+
+def _pause_for_login(robot_name: str, next_robot: Optional[str] = None) -> None:
+    """Laisse le temps de se connecter à Facebook avant de lancer le robot suivant."""
+    current_url = _get_current_browser_url(robot_name)
+    checkpoint = _looks_like_checkpoint(current_url)
+    message = [
+        "\n  Le navigateur est ouvert pour la connexion Facebook.",
+        f"  Robot actuel: {robot_name}",
+    ]
+    if next_robot:
+        message.append(f"  Robot suivant: {next_robot}")
+    if checkpoint:
+        message.append("  Facebook est en verification / checkpoint.")
+        message.append("  Termine la verification manuellement dans le navigateur.")
+        message.append("  Quand tu as fini, tape 'ok' puis Entrée pour continuer.")
+    else:
+        message.append("  Si Facebook affiche une vérification en deux étapes, termine-la avant de continuer.")
+        message.append("  Ensuite, appuie sur Entrée pour passer au robot suivant.")
+    if current_url:
+        message.append(f"  URL actuelle: {current_url}")
+    print("\n".join(message))
+
+    if sys.stdin.isatty():
+        if checkpoint:
+            watch_s = int(os.getenv("BON_START_WATCH_INTERVAL_S", "5"))
+            _wait_for_checkpoint_release(robot_name, poll_s=watch_s)
+        else:
+            try:
+                input("  Entrée pour lancer le robot suivant...")
+            except EOFError:
+                pass
+    else:
+        wait_s = int(os.getenv("BON_START_LOGIN_WAIT_S", "300"))
+        print(f"  Terminal non interactif. Pause automatique de {wait_s}s...")
+        time.sleep(wait_s)
+
+    try:
+        sm = get_session_manager()
+        session = sm.get_session(robot_name)
+        if session:
+            state_file = session.profile_dir / "storage_state.json"
+            try:
+                session._browser_ctx.storage_state(path=str(state_file))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _choose_robot_batch(db) -> List[str]:
+    """Demande quels robots démarrer quand aucun robot n'est fourni."""
+    robots = db.get_all_robots()
+    if not robots:
+        return []
+    if len(robots) == 1:
+        return [robots[0]["robot_name"]]
+
+    print("\n  Choisis le mode de démarrage :")
+    print("  1) Tous les robots")
+    print("  2) Choisir un ou plusieurs robots")
+    print("  0) Annuler")
+    choice = _prompt_input("Mode", default="1")
+
+    if choice == "0":
+        return []
+    if choice == "1":
+        return [r["robot_name"] for r in robots]
+
+    print("  Robots disponibles :")
+    for idx, robot in enumerate(robots, start=1):
+        account = robot.get("account_name", "—")
+        print(f"  {idx}) {robot['robot_name']}  [{account}]")
+
+    raw = _prompt_input("Numéros séparés par des virgules (ex: 1,3)", required=True)
+    selected: List[str] = []
+    for token in _split_urls(raw.replace(" ", ",")):
+        if token.isdigit():
+            idx = int(token)
+            if 1 <= idx <= len(robots):
+                name = robots[idx - 1]["robot_name"]
+                if name not in selected:
+                    selected.append(name)
+        else:
+            for robot in robots:
+                if token == robot["robot_name"] and token not in selected:
+                    selected.append(token)
+    return selected
+
+
+def _format_browser_processes(processes: List[dict], limit: int = 5) -> str:
+    """Résume les processus navigateur détectés pour un robot."""
+    if not processes:
+        return ""
+    preview = []
+    for proc in processes[:limit]:
+        pid = proc.get("pid", "?")
+        name = proc.get("name", "browser")
+        preview.append(f"{name}#{pid}")
+    extra = len(processes) - len(preview)
+    suffix = f" (+{extra} autres)" if extra > 0 else ""
+    return ", ".join(preview) + suffix
+
+
+def _choose_robot_campaign(db, robot_name: str) -> Optional[dict]:
+    """Retourne la campagne préenregistrée à utiliser pour un robot."""
+    campaigns = db.get_campaigns_for_robot(robot_name)
+    if not campaigns:
+        campaigns = db.get_all_campaigns()
+    if not campaigns:
+        return None
+    chosen = campaigns[0]
+    if isinstance(chosen, dict) and chosen.get("id"):
+        variant = db.pick_random_variant(chosen["name"], language=chosen.get("language", "fr"))
+        if variant:
+            chosen = dict(chosen)
+            chosen["variant"] = variant
+    return chosen
+
+
+def _build_publish_content(db, robot_name: str) -> str:
+    """Construit le contenu à publier depuis la campagne du robot."""
+    campaign = _choose_robot_campaign(db, robot_name)
+    if not campaign:
+        return ""
+
+    variant = campaign.get("variant")
+    if not variant:
+        variant = db.pick_random_variant(campaign["name"], language=campaign.get("language", "fr"))
+    if not variant:
+        return ""
+
+    text = (variant.get("text") or variant.get("text_fr") or "").strip()
+    cta = (variant.get("cta") or "").strip()
+    if cta and cta.lower() not in text.lower():
+        text = f"{text}\n\n{cta}".strip()
+    return text
+
+
+def _best_effort_publish(page, target_url: str, content: str) -> bool:
+    """Essaie de publier un texte sur la cible via des sélecteurs FB génériques."""
+    try:
+        page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(2500)
+    except Exception as e:
+        _print_err(f"Navigation impossible vers {target_url}: {e}")
+        return False
+
+    composer_selectors = [
+        "div[data-lexical-editor='true']",
+        "div[data-contents='true']",
+        "[data-testid='status-attachment-mentions-input']",
+        "#composerInput",
+        "textarea[name='xhpc_message']",
+        "div[data-pagelet='FeedComposer']",
+        "div[aria-label*='composer']",
+        "div[role='textbox'][contenteditable='true']",
+        "div[contenteditable='true'][role='textbox']",
+        "div[contenteditable='true']",
+    ]
+    post_button_selectors = [
+        "[data-testid='react-composer-post-button']",
+        "div[role='button']:has-text('Publier')",
+        "div[role='button']:has-text('Post')",
+        "div[role='button']:has-text('Partager')",
+        "div[role='button']:has-text('Share')",
+        "button:has-text('Publier')",
+        "button:has-text('Post')",
+    ]
+
+    composer = None
+    for sel in composer_selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.is_visible(timeout=1500):
+                composer = loc
+                break
+        except Exception:
+            continue
+
+    if not composer:
+        _print_err(f"Aucun composer trouvé sur {target_url}")
+        return False
+
+    try:
+        composer.click()
+        try:
+            composer.fill(content)
+        except Exception:
+            composer.press_sequentially(content, delay=25)
+        page.wait_for_timeout(1200)
+    except Exception as e:
+        _print_err(f"Impossible de saisir le contenu: {e}")
+        return False
+
+    for sel in post_button_selectors:
+        try:
+            button = page.locator(sel).first
+            if button.is_visible(timeout=1200):
+                button.click()
+                page.wait_for_timeout(2500)
+                return True
+        except Exception:
+            continue
+
+    try:
+        page.keyboard.press("Control+Enter")
+        page.wait_for_timeout(2500)
+        return True
+    except Exception:
+        pass
+
+    _print_err("Impossible de trouver le bouton de publication.")
+    return False
+
+
+def _interactive_publish(kind: str) -> None:
+    """Lance un flux interactif de publication dans un groupe ou sur une page."""
+    db = get_database()
+    robot_name = _choose_robot_name(db, prompt="Choix du robot")
+    if not robot_name:
+        _print_err("Aucun robot disponible.")
+        return
+    content = _build_publish_content(db, robot_name)
+    if not content:
+        content = _prompt_input("Contenu à publier", required=True)
+
+    if kind == "group":
+        targets = [g["url"] for g in db.get_groups_for_robot(robot_name)]
+        if not targets:
+            raw_targets = _prompt_input(
+                "Aucun groupe assigné. Liens des groupes (séparés par des virgules)",
+                required=True,
+            )
+            targets = _split_urls(raw_targets)
+        label = "groupe"
+    else:
+        raw_target = _prompt_input("Lien de la page", required=True)
+        targets = [raw_target]
+        label = "page"
+
+    if not targets:
+        _print_err("Aucune cible valide fournie.")
+        return
+
+    sm, session = _ensure_robot_session(robot_name)
+    if not session.is_active() or not getattr(session, "_browser_ctx", None):
+        if not sm.start_session(robot_name):
+            _print_err(f"Impossible de démarrer la session du robot {robot_name}.")
+            return
+        session = sm.get_session(robot_name) or session
+
+    _print_header(f"Publication {label}")
+    print(f"  Robot   : {robot_name}")
+    print(f"  Cibles  : {len(targets)}")
+    print(f"  Texte   : {content[:120]}{'...' if len(content) > 120 else ''}")
+
+    try:
+        context = session._browser_ctx
+        if not context:
+            _print_err("Aucun navigateur actif n'est disponible pour ce robot.")
+            return
+
+        page = _pick_active_page(context)
+        _wait_for_page_ready(page, robot_name, context_label="publication")
+        for idx, target_url in enumerate(targets, start=1):
+            _wait_for_page_ready(page, robot_name, context_label="publication")
+            print(f"  -> [{idx}/{len(targets)}] {target_url}")
+            ok = _best_effort_publish(page, target_url, content)
+            print(f"     {'✓' if ok else '✗'} terminé")
+            if not ok:
+                print("     La publication n'a pas été effectuée. Je n'envoie pas le robot au groupe suivant.")
+                break
+            if idx < len(targets):
+                time.sleep(2)
+
+        print("  Le navigateur du robot reste ouvert.")
+        input("Appuie sur Entrée pour revenir au terminal...")
+    except Exception as e:
+        _print_err(f"Échec du lancement navigateur: {e}")
+
+
+def _interactive_recover_group_links() -> None:
+    """Affiche et exporte les groupes connus en base."""
+    db = get_database()
+    robot_name = _choose_robot_name(db, prompt="Choix du robot")
+    groups = db.get_groups_for_robot(robot_name) if robot_name else db.get_all_groups()
+
+    _print_header("Liens des groupes")
+    if not groups:
+        print("  Aucun groupe en base.")
+        return
+
+    print(f"  Groupes actifs trouvés : {len(groups)}")
+    for row in groups[:50]:
+        print(f"  - {row['url']}")
+    if len(groups) > 50:
+        print(f"  ... et {len(groups) - 50} autres")
+
+    out_path = _prompt_input("Fichier d'export texte", default="group_links.txt")
+    try:
+        path = pathlib.Path(out_path)
+        path.write_text("\n".join(row["url"] for row in groups) + "\n", encoding="utf-8")
+        print(f"  Exporté vers : {path.resolve()}")
+    except Exception as e:
+        _print_err(f"Export impossible: {e}")
+
+
+def _interactive_menu() -> None:
+    """Menu de démarrage interactif."""
+    while True:
+        _print_header("Menu interactif")
+        print("  1) Publier dans les groupes du robot")
+        print("  2) Publier sur une page")
+        print("  3) Récupérer les liens des groupes du robot")
+        print("  0) Quitter")
+        choice = _prompt_input("Choix", default="1")
+
+        if choice == "1":
+            _interactive_publish("group")
+            return
+        if choice == "2":
+            _interactive_publish("page")
+            return
+        if choice == "3":
+            _interactive_recover_group_links()
+            return
+        if choice in {"0", "q", "quit", "exit"}:
+            print("  Au revoir.")
+            return
+        print("  Choix invalide.")
 
 
 # ── Commande : add-account ────────────────────────────────────────────────────
@@ -123,31 +655,69 @@ def cmd_start(args):
     sm = get_session_manager()
     robots = args.robots if hasattr(args, "robots") and args.robots else []
 
-    # Si aucun robot spécifié, démarrer tous les robots actifs
+    # Si aucun robot spécifié, demander un choix ou démarrer tous les robots actifs
     if not robots:
         try:
             db = get_database()
-            robots = [r["robot_name"] for r in db.get_all_robots()
-                      if r.get("active", 1)]
+            if sys.stdin.isatty():
+                robots = _choose_robot_batch(db)
+            else:
+                robots = [r["robot_name"] for r in db.get_all_robots()
+                          if r.get("active", 1)]
         except Exception as e:
             _print_err(f"Impossible de lister les robots : {e}")
             sys.exit(1)
 
     if not robots:
-        _print_err("Aucun robot actif trouvé.")
-        sys.exit(1)
+        print("  Démarrage annulé.")
+        return
 
     _print_header("Start Sessions")
     print(f"  Démarrage de {len(robots)} session(s)...\n")
 
     results = {}
-    for robot_name in robots:
+    for idx, robot_name in enumerate(robots):
+        session = sm.get_session(robot_name)
+
+        browser_processes = sm.list_browser_processes(robot_name)
+        already_open = bool(session and session.is_active())
+        orphan_browser = bool(browser_processes)
+
+        if already_open or orphan_browser:
+            details = []
+            if already_open:
+                details.append("session active")
+            if orphan_browser:
+                details.append(f"navigateur détecté: {_format_browser_processes(browser_processes)}")
+            prompt = f"{robot_name} est déjà ouvert ({'; '.join(details)}). Le fermer et relancer ?"
+
+            should_restart = True
+            if sys.stdin.isatty():
+                should_restart = _prompt_yes_no(prompt, default_yes=True)
+            else:
+                print(f"  {prompt} -> fermeture automatique")
+
+            if should_restart:
+                if already_open:
+                    sm.stop_session(robot_name)
+                killed = sm.terminate_browser_processes(robot_name)
+                if killed:
+                    print(f"  Processus navigateur fermés pour {robot_name}: {killed}")
+                    time.sleep(1)
+                session = sm.create_session(robot_name, from_db=True)
+            else:
+                print(f"  {robot_name} laissé en l'état.")
+                continue
+
         session = sm.create_session(robot_name, from_db=True)
         ok = sm.start_session(robot_name)
         results[robot_name] = ok
         icon = "✓" if ok else "✗"
         proxy = session.proxy_server or "no proxy"
         print(f"  {icon} {robot_name:<20} [{proxy}]  → {session.state.value}")
+        if ok:
+            next_robot = robots[idx + 1] if idx + 1 < len(robots) else None
+            _pause_for_login(robot_name, next_robot=next_robot)
 
     total_ok = sum(1 for v in results.values() if v)
     print(f"\n  {total_ok}/{len(robots)} sessions démarrées.")
@@ -442,7 +1012,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="bon-v14",
         description="BON v14 — Facebook Groups Publisher Pro CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+    epilog="""
 Exemples :
   python -m bon add-account --name robot1 --email test@fb.com
   python -m bon assign-proxy --robot robot1 --proxy-server http://1.2.3.4:8080
@@ -452,6 +1022,7 @@ Exemples :
   python -m bon enqueue --type post --robot robot1 --campaign camp1
   python -m bon queue --status pending
   python -m bon health
+  python -m bon
         """,
     )
     sub = p.add_subparsers(dest="command")
@@ -526,6 +1097,10 @@ Exemples :
 
 def run_cli(argv: Optional[List[str]] = None):
     """Point d'entrée CLI v14 (peut être appelé depuis __main__.py)."""
+    if argv is None and len(sys.argv) == 1 and sys.stdin.isatty():
+        _interactive_menu()
+        return
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -550,7 +1125,10 @@ def run_cli(argv: Optional[List[str]] = None):
             _print_err(str(e))
             sys.exit(1)
     elif args.command is None:
-        parser.print_help()
+        if sys.stdin.isatty():
+            _interactive_menu()
+        else:
+            parser.print_help()
     else:
         _print_err(f"Commande inconnue : {args.command}")
         parser.print_help()

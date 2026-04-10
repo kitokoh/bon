@@ -435,6 +435,7 @@ class BONDatabase:
                 conn.execute(stmt)
             conn.commit()
             self._apply_migrations(conn)
+            self.bootstrap_default_workspace()
             emit("INFO", "DATABASE_INITIALIZED_V14", path=str(self.db_path))
 
     def _apply_migrations(self, conn):
@@ -458,6 +459,44 @@ class BONDatabase:
                 conn.commit()
             except Exception:
                 pass
+
+    def update_account_ui_profile(self, account, lang: str,
+                                   variant: str, confidence: int = 0) -> None:
+        """
+        Sauvegarde le profil UI détecté pour un compte.
+        Appelé par AccountUIProfiler après détection automatique.
+        """
+        account_id = self._resolve_account_id(account)
+        if not account_id and isinstance(account, str):
+            account_id = self.ensure_account_exists(account)
+        if account_id:
+            from datetime import datetime as _dt
+            now = _dt.now().isoformat()
+            self._exec(
+                """UPDATE accounts
+                   SET ui_lang=?, ui_variant=?, ui_confidence=?,
+                       ui_detected_at=?, updated_at=?
+                   WHERE id=?""",
+                (lang, variant, confidence, now, now, account_id)
+            )
+
+    def get_ui_profile(self, account) -> dict:
+        """
+        Retourne le profil UI stocké pour un compte.
+        Returns dict avec: ui_lang, ui_variant, ui_confidence, ui_detected_at
+
+        Utilise dict(row) pour être safe sur des DB existantes où la migration
+        _apply_migrations() n'a pas encore ajouté les colonnes ui_*.
+        """
+        row = (self.get_account(account) if isinstance(account, str)
+               else self.get_account_by_id(account))
+        if not row:
+            return {}
+        row_dict = dict(row) if row else {}
+        result = {}
+        for key in ("ui_lang", "ui_variant", "ui_confidence", "ui_detected_at"):
+            result[key] = row_dict.get(key)
+        return result
 
     # ── Helpers résolution ────────────────────────────────────────────────
 
@@ -969,6 +1008,205 @@ class BONDatabase:
             "SELECT * FROM campaign_variants WHERE campaign_id=? ORDER BY weight DESC",
             (campaign_id,)
         )
+
+    def get_seed_group_payloads(self) -> List[Dict]:
+        """Retourne les groupes de test par défaut."""
+        return [
+            {
+                "url": "https://www.facebook.com/groups/1616683065262089",
+                "name": "Groupe fourni",
+                "category": "test",
+                "language": "fr",
+                "members_count": None,
+            },
+            {
+                "url": "https://www.facebook.com/groups/bon-test-group-1/",
+                "name": "BON Test Group 1",
+                "category": "test",
+                "language": "fr",
+                "members_count": 1250,
+            },
+            {
+                "url": "https://www.facebook.com/groups/bon-test-group-2/",
+                "name": "BON Test Group 2",
+                "category": "test",
+                "language": "fr",
+                "members_count": 840,
+            },
+            {
+                "url": "https://www.facebook.com/groups/bon-test-group-3/",
+                "name": "BON Test Group 3",
+                "category": "test",
+                "language": "en",
+                "members_count": 560,
+            },
+        ]
+
+    def get_seed_campaign_payloads(self) -> Dict[str, Dict]:
+        """Retourne les campagnes de test par défaut."""
+        return {
+            "test-launch": {
+                "name": "test-launch",
+                "description": "Campagne de test BON",
+                "language": "fr",
+                "active": True,
+                "variants": [
+                    {
+                        "id": "v1",
+                        "text_fr": "Bonjour, voici un post de test pour valider le flux BON.",
+                        "text_en": "Hello, this is a test post to validate the BON flow.",
+                        "text_ar": "مرحبا، هذا منشور اختبار للتحقق من تدفق BON.",
+                        "cta": "Découvrir",
+                        "weight": 2,
+                        "bg_color": "#1877F2",
+                        "post_type": "text_image",
+                    },
+                    {
+                        "id": "v2",
+                        "text_fr": "Version alternative de test pour vérifier les variantes.",
+                        "text_en": "Alternative test version to verify variants.",
+                        "text_ar": "نسخة اختبار بديلة للتحقق من المتغيرات.",
+                        "cta": "Voir plus",
+                        "weight": 1,
+                        "bg_color": "#42B72A",
+                        "post_type": "text",
+                    },
+                ],
+            },
+            "follow-up": {
+                "name": "follow-up",
+                "description": "Campagne de suivi BON",
+                "language": "fr",
+                "active": True,
+                "variants": [
+                    {
+                        "id": "v1",
+                        "text_fr": "Merci pour votre retour, voici un second message de test.",
+                        "text_en": "Thanks for your feedback, here is a second test message.",
+                        "text_ar": "شكرًا لملاحظاتك، هذه رسالة اختبار ثانية.",
+                        "cta": "Répondre",
+                        "weight": 1,
+                        "bg_color": "#F28C28",
+                        "post_type": "text_image",
+                    }
+                ],
+            },
+        }
+
+    def bootstrap_default_workspace(self, force: bool = False) -> Dict[str, int]:
+        """
+        Initialise des données de test SQLite si la base est vide.
+
+        Cette méthode remplace le besoin de ressaisir les groupes ou textes dans
+        la console. Elle reste idempotente grâce aux upserts.
+        """
+        stats = {
+            "accounts": 0,
+            "robots": 0,
+            "groups": 0,
+            "campaigns": 0,
+            "assignments": 0,
+        }
+
+        if str(self.db_path) == ":memory:" and not force:
+            return stats
+
+        if not force and str(self.db_path) == ":memory:":
+            return stats
+
+        seed_robots = [
+            {
+                "robot_name": "robot1",
+                "account_name": "robot1_account",
+                "storage_state_path": str(pathlib.Path("chrome_profiles") / "robot1" / "storage_state.json"),
+                "config": {
+                    "delay_between_groups": [45, 90],
+                    "max_groups_per_run": 5,
+                    "max_groups_per_hour": 3,
+                    "max_runs_per_day": 1,
+                },
+                "groups": [
+                    "https://www.facebook.com/groups/1616683065262089",
+                    "https://www.facebook.com/groups/bon-test-group-1/",
+                    "https://www.facebook.com/groups/bon-test-group-2/",
+                ],
+                "campaigns": ["test-launch"],
+            },
+            {
+                "robot_name": "robot2",
+                "account_name": "robot2_account",
+                "storage_state_path": str(pathlib.Path("chrome_profiles") / "robot2" / "storage_state.json"),
+                "config": {
+                    "delay_between_groups": [60, 120],
+                    "max_groups_per_run": 4,
+                    "max_groups_per_hour": 2,
+                    "max_runs_per_day": 1,
+                },
+                "groups": [
+                    "https://www.facebook.com/groups/1616683065262089",
+                    "https://www.facebook.com/groups/bon-test-group-2/",
+                    "https://www.facebook.com/groups/bon-test-group-3/",
+                ],
+                "campaigns": ["follow-up"],
+            },
+        ]
+
+        for group_data in self.get_seed_group_payloads():
+            self.add_group(
+                url=group_data["url"],
+                name=group_data.get("name"),
+                category=group_data.get("category"),
+                language=group_data.get("language", "fr"),
+                members_count=group_data.get("members_count"),
+            )
+            stats["groups"] += 1
+
+        for camp_key, camp_data in self.get_seed_campaign_payloads().items():
+            cid = self.upsert_campaign(
+                camp_data.get("name", camp_key),
+                camp_data.get("description", ""),
+                camp_data.get("language", "fr"),
+                camp_data.get("active", True),
+            )
+            stats["campaigns"] += 1
+            for variant in camp_data.get("variants", []):
+                self.upsert_variant(
+                    campaign_id=cid,
+                    variant_key=variant.get("id", "v1"),
+                    text_fr=variant.get("text_fr"),
+                    text_en=variant.get("text_en"),
+                    text_ar=variant.get("text_ar"),
+                    cta=variant.get("cta", ""),
+                    weight=variant.get("weight", 1),
+                    bg_color=variant.get("bg_color"),
+                    post_type=variant.get("post_type", "text_image"),
+                )
+
+        for robot_data in seed_robots:
+            self.ensure_account_exists(robot_data["account_name"])
+            self.upsert_robot(
+                robot_name=robot_data["robot_name"],
+                account_name=robot_data["account_name"],
+                storage_state_path=robot_data["storage_state_path"],
+                config=robot_data["config"],
+            )
+            stats["robots"] += 1
+            for group_url in robot_data.get("groups", []):
+                if self.assign_group_to_robot(robot_data["robot_name"], group_url):
+                    stats["assignments"] += 1
+            for campaign_name in robot_data.get("campaigns", []):
+                if self.assign_campaign_to_robot(robot_data["robot_name"], campaign_name):
+                    stats["assignments"] += 1
+
+        emit(
+            "INFO",
+            "WORKSPACE_BOOTSTRAPPED",
+            robots=stats["robots"],
+            groups=stats["groups"],
+            campaigns=stats["campaigns"],
+            assignments=stats["assignments"],
+        )
+        return stats
 
     def pick_random_variant(self, campaign_name, language="fr"):
         """Tire un variant pondéré par weight."""
@@ -1740,44 +1978,3 @@ def reset_database(new_instance: Optional[BONDatabase] = None) -> None:
             except Exception:
                 pass
         _db_instance = new_instance
-
-
-    # ── UI Profile (ajouté v13) ───────────────────────────────────────────
-
-    def update_account_ui_profile(self, account, lang: str,
-                                   variant: str, confidence: int = 0) -> None:
-        """
-        Sauvegarde le profil UI détecté pour un compte.
-        Appelé par AccountUIProfiler après détection automatique.
-        """
-        account_id = self._resolve_account_id(account)
-        if not account_id and isinstance(account, str):
-            account_id = self.ensure_account_exists(account)
-        if account_id:
-            from datetime import datetime as _dt
-            now = _dt.now().isoformat()
-            self._exec(
-                """UPDATE accounts
-                   SET ui_lang=?, ui_variant=?, ui_confidence=?,
-                       ui_detected_at=?, updated_at=?
-                   WHERE id=?""",
-                (lang, variant, confidence, now, now, account_id)
-            )
-
-    def get_ui_profile(self, account) -> dict:
-        """
-        Retourne le profil UI stocké pour un compte.
-        Returns dict avec: ui_lang, ui_variant, ui_confidence, ui_detected_at
-
-        Utilise dict(row) pour être safe sur des DB existantes où la migration
-        _apply_migrations() n'a pas encore ajouté les colonnes ui_*.
-        """
-        row = (self.get_account(account) if isinstance(account, str)
-               else self.get_account_by_id(account))
-        if not row:
-            return {}
-        row_dict = dict(row) if row else {}
-        result = {}
-        for key in ("ui_lang", "ui_variant", "ui_confidence", "ui_detected_at"):
-            result[key] = row_dict.get(key)
-        return result

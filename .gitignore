@@ -11,6 +11,8 @@ logs/
 *.jsonl
 *.pid
 scraper.log
+chrome_profiles/
+.pytest_cache/
 
 # ── Données sensibles (jamais versionnées) ───────────────
 data/sessions/

@@ -20,6 +20,9 @@ import uuid
 import shutil
 import threading
 import pathlib
+import json
+import subprocess
+from atexit import register as atexit_register
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable
@@ -39,6 +42,7 @@ try:
 except ImportError:
     PROFILES_ROOT = pathlib.Path("chrome_profiles")
 
+PROFILES_ROOT = PROFILES_ROOT.resolve()
 PROFILES_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -82,6 +86,7 @@ class IsolatedSession:
 
     # Référence au browser Playwright (géré par PlaywrightEngine)
     _browser_ctx: Optional[object] = field(default=None, repr=False)
+    _playwright: Optional[object] = field(default=None, repr=False)
 
     @property
     def profile_dir(self) -> pathlib.Path:
@@ -90,7 +95,7 @@ class IsolatedSession:
         Format : chrome_profiles/<robot_name>/
         Le répertoire persiste entre les runs pour conserver les cookies.
         """
-        p = PROFILES_ROOT / self._safe_name(self.robot_name)
+        p = (PROFILES_ROOT / self._safe_name(self.robot_name)).resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -224,27 +229,64 @@ class SessionManager:
             emit("INFO", "SESSION_STARTING", robot=robot_name,
                  session_id=session.session_id)
 
-        try:
-            # Vérification isolation profil
-            self._verify_profile_isolation(session)
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 3):
+            try:
+                # Vérification isolation profil
+                self._verify_profile_isolation(session)
 
-            with session._lock:
-                session.state = SessionState.RUNNING
-                session.started_at = datetime.now()
-                session.run_count += 1
-                session.error_msg = None
+                # Ouvre un navigateur Playwright distinct pour ce robot.
+                browser_ctx = self._launch_isolated_browser(session)
+                if browser_ctx is None:
+                    raise RuntimeError("Impossible d'ouvrir un navigateur isole")
 
-            emit("INFO", "SESSION_STARTED", robot=robot_name,
-                 run_count=session.run_count,
-                 profile_dir=str(session.profile_dir))
-            return True
+                with session._lock:
+                    session.state = SessionState.RUNNING
+                    session.started_at = datetime.now()
+                    session.run_count += 1
+                    session.error_msg = None
+                    session._browser_ctx = browser_ctx
+                    session._playwright = getattr(browser_ctx, "_bon_playwright", None)
 
-        except Exception as e:
-            with session._lock:
-                session.state = SessionState.ERROR
-                session.error_msg = str(e)
-            emit("ERROR", "SESSION_START_FAILED", robot=robot_name, error=str(e))
-            return False
+                emit("INFO", "SESSION_STARTED", robot=robot_name,
+                     run_count=session.run_count,
+                     profile_dir=str(session.profile_dir),
+                     browser="playwright_persistent_context")
+                return True
+
+            except Exception as e:
+                last_error = e
+                emit("WARN", "SESSION_START_ATTEMPT_FAILED",
+                     robot=robot_name, attempt=attempt, error=str(e))
+
+                if attempt == 1:
+                    try:
+                        killed = self.terminate_browser_processes(robot_name)
+                    except Exception:
+                        killed = 0
+                    if killed > 0:
+                        time.sleep(1)
+                        continue
+                break
+
+        with session._lock:
+            session.state = SessionState.ERROR
+            session.error_msg = str(last_error) if last_error else "Impossible d'ouvrir un navigateur isole"
+            if session._browser_ctx:
+                try:
+                    session._browser_ctx.close()
+                except Exception:
+                    pass
+                try:
+                    if session._playwright:
+                        session._playwright.stop()
+                except Exception:
+                    pass
+                session._browser_ctx = None
+                session._playwright = None
+        self._close_playwright_runtime_if_idle()
+        emit("ERROR", "SESSION_START_FAILED", robot=robot_name, error=str(last_error) if last_error else "Impossible d'ouvrir un navigateur isole")
+        return False
 
     def stop_session(self, robot_name: str, clean_profile: bool = False) -> bool:
         """Arrête une session proprement."""
@@ -264,10 +306,20 @@ class SessionManager:
             # Fermer le browser context si présent
             if session._browser_ctx:
                 try:
+                    self._persist_session_state(session)
                     session._browser_ctx.close()
                 except Exception:
                     pass
+                try:
+                    pw = session._playwright
+                    if pw:
+                        pw.stop()
+                except Exception:
+                    pass
                 session._browser_ctx = None
+                session._playwright = None
+
+            self._close_playwright_runtime_if_idle()
 
             # Optionnel : nettoyer le profil (attention = perd les cookies)
             if clean_profile and session.profile_dir.exists():
@@ -287,6 +339,7 @@ class SessionManager:
                 session.state = SessionState.ERROR
                 session.error_msg = str(e)
             emit("ERROR", "SESSION_STOP_FAILED", robot=robot_name, error=str(e))
+            self._close_playwright_runtime_if_idle()
             return False
 
     def restart_session(self, robot_name: str) -> bool:
@@ -295,6 +348,93 @@ class SessionManager:
         self.stop_session(robot_name)
         time.sleep(2)  # Pause courte avant redémarrage
         return self.start_session(robot_name)
+
+    def _profile_dir_for_robot(self, robot_name: str) -> pathlib.Path:
+        """Calcule le répertoire de profil attendu pour un robot."""
+        return (PROFILES_ROOT / IsolatedSession._safe_name(robot_name)).resolve()
+
+    def list_browser_processes(self, robot_name: str) -> List[Dict]:
+        """
+        Retourne les processus navigateur liés au profil du robot.
+
+        Utile quand le process Playwright/Chrome est resté vivant après un crash
+        ou une fermeture incomplète de l'app.
+        """
+        profile_str = str(self._profile_dir_for_robot(robot_name))
+        if not profile_str:
+            return []
+
+        ps_script = (
+            "$needle = [regex]::Escape('%s'); "
+            "$items = @("
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.CommandLine -and $_.CommandLine -match $needle } | "
+            "Select-Object ProcessId,Name,CommandLine"
+            "); "
+            "if ($items) { $items | ConvertTo-Json -Compress } else { '[]' }"
+        ) % profile_str.replace("'", "''")
+
+        try:
+            completed = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            raw = (completed.stdout or "").strip()
+            if not raw:
+                return []
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                payload = [payload]
+            results: List[Dict] = []
+            for item in payload or []:
+                try:
+                    results.append({
+                        "pid": int(item.get("ProcessId")),
+                        "name": item.get("Name", ""),
+                        "command_line": item.get("CommandLine", ""),
+                    })
+                except Exception:
+                    continue
+            return results
+        except Exception as e:
+            emit("WARN", "SESSION_PROCESS_SCAN_FAILED", robot=robot_name, error=str(e))
+            return []
+
+    def terminate_browser_processes(self, robot_name: str) -> int:
+        """
+        Termine les processus navigateur associés au profil du robot.
+
+        Retourne le nombre de PIDs arrêtés avec succès.
+        """
+        processes = self.list_browser_processes(robot_name)
+        stopped = 0
+        for proc in processes:
+            pid = proc.get("pid")
+            if not pid:
+                continue
+            try:
+                result = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    stopped += 1
+                    emit("INFO", "SESSION_BROWSER_PROCESS_KILLED",
+                         robot=robot_name, pid=pid)
+                else:
+                    emit("WARN", "SESSION_BROWSER_PROCESS_KILL_FAILED",
+                         robot=robot_name, pid=pid,
+                         output=(result.stderr or result.stdout or "")[:200])
+            except Exception as e:
+                emit("WARN", "SESSION_BROWSER_PROCESS_KILL_ERROR",
+                     robot=robot_name, pid=pid, error=str(e))
+        return stopped
 
     # ── Lecture ───────────────────────────────────────────────────────────
 
@@ -339,6 +479,78 @@ class SessionManager:
 
         return args
 
+    def _get_playwright_runtime(self):
+        """Retourne une instance Playwright sync partagée dans le process."""
+        global _playwright_runtime
+        with _playwright_lock:
+            if _playwright_runtime is None:
+                try:
+                    from playwright.sync_api import sync_playwright
+                except Exception as e:
+                    emit("ERROR", "PLAYWRIGHT_IMPORT_FAILED", error=str(e))
+                    return None
+                _playwright_runtime = sync_playwright().start()
+            return _playwright_runtime
+
+    def _close_playwright_runtime_if_idle(self):
+        """Ferme le runtime partagé si aucune session active ne reste."""
+        global _playwright_runtime
+        with _playwright_lock:
+            if _playwright_runtime is not None and self.active_count() == 0:
+                try:
+                    _playwright_runtime.stop()
+                except Exception:
+                    pass
+                _playwright_runtime = None
+
+    def _launch_isolated_browser(self, session: IsolatedSession):
+        """Lance un contexte navigateur persistant et isolé pour un robot."""
+        launch_args = self.build_playwright_launch_args(session)
+        launch_args["headless"] = False
+
+        try:
+            pw = self._get_playwright_runtime()
+            if pw is None:
+                return None
+            context = pw.chromium.launch_persistent_context(**launch_args)
+
+            page = None
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+
+            if page is not None:
+                current_url = getattr(page, "url", "") or ""
+                if "two_step_verification" in current_url or "checkpoint" in current_url:
+                    emit("WARN", "SESSION_CHECKPOINT_DETECTED",
+                         robot=session.robot_name,
+                         url=current_url[:180])
+                else:
+                    emit("INFO", "SESSION_LOGIN_READY",
+                         robot=session.robot_name,
+                         url=current_url[:180] if current_url else "unknown")
+
+            emit("INFO", "SESSION_BROWSER_OPENED",
+                 robot=session.robot_name,
+                 profile_dir=str(session.profile_dir))
+            return context
+        except Exception as e:
+            emit("ERROR", "SESSION_BROWSER_OPEN_FAILED",
+                 robot=session.robot_name, error=str(e))
+            return None
+
+    def _persist_session_state(self, session: IsolatedSession) -> None:
+        """Sauvegarde explicitement l'état du navigateur sur disque."""
+        if not session._browser_ctx:
+            return
+        state_file = session.profile_dir / "storage_state.json"
+        try:
+            session._browser_ctx.storage_state(path=str(state_file))
+        except Exception:
+            pass
+
     # ── Interne ───────────────────────────────────────────────────────────
 
     def _get_session(self, robot_name: str) -> Optional[IsolatedSession]:
@@ -376,6 +588,8 @@ class SessionManager:
 
 _session_manager: Optional[SessionManager] = None
 _sm_lock = threading.Lock()
+_playwright_runtime = None
+_playwright_lock = threading.Lock()
 
 
 def get_session_manager() -> SessionManager:
@@ -385,3 +599,17 @@ def get_session_manager() -> SessionManager:
             if _session_manager is None:
                 _session_manager = SessionManager()
     return _session_manager
+
+
+def _shutdown_playwright_on_exit():
+    global _playwright_runtime
+    with _playwright_lock:
+        if _playwright_runtime is not None:
+            try:
+                _playwright_runtime.stop()
+            except Exception:
+                pass
+            _playwright_runtime = None
+
+
+atexit_register(_shutdown_playwright_on_exit)
